@@ -3,7 +3,8 @@
 
 """
 NIFTY-LAB | DAILY EQUITY SANITY CHECK
-Schema-agnostic, case-safe version
+Checks cleaned daily equity data before appending to master
+(CLEAN SCHEMA VERSION)
 """
 
 from pathlib import Path
@@ -15,16 +16,15 @@ import pandas as pd
 BASE = Path(r"H:\NIFTY-LAB")
 EQ_DAILY_DIR = BASE / "data" / "processed" / "daily" / "equity"
 
-# --------------------------------------------------
-# HELPERS
-# --------------------------------------------------
-def find_col(df, names):
-    """Return first matching column name (case-insensitive)"""
-    cols = {c.lower(): c for c in df.columns}
-    for n in names:
-        if n.lower() in cols:
-            return cols[n.lower()]
-    raise KeyError(f"None of columns {names} found in {df.columns.tolist()}")
+# Expected schema AFTER cleaning
+REQUIRED_COLS = {
+    "DATE",
+    "OPEN",
+    "HIGH",
+    "LOW",
+    "CLOSE",
+    "SYMBOL",
+}
 
 # --------------------------------------------------
 # MAIN
@@ -34,6 +34,7 @@ def main():
     print("=" * 80)
 
     files = sorted(EQ_DAILY_DIR.glob("clean_equity_*.parquet"))
+
     if not files:
         print("⚠️ No cleaned daily equity files found")
         return
@@ -51,30 +52,24 @@ def main():
     print(df.columns.tolist())
 
     # --------------------------------------------------
-    # DYNAMIC COLUMN RESOLUTION
-    # --------------------------------------------------
-    DATE_COL = find_col(df, ["date", "trade_date"])
-    OPEN = find_col(df, ["open"])
-    HIGH = find_col(df, ["high"])
-    LOW = find_col(df, ["low"])
-    CLOSE = find_col(df, ["close"])
-    SYMBOL = find_col(df, ["symbol"])
-    VOLUME = find_col(df, ["volume"])
-
-    # --------------------------------------------------
     # DATE CHECKS
     # --------------------------------------------------
     print("\n📅 DATE CHECKS")
-    print(f"Unique dates : {df[DATE_COL].nunique()}")
+    print(f"Unique dates : {df['DATE'].nunique()}")
     print(
-        f"Date range  : {df[DATE_COL].min()} → {df[DATE_COL].max()}"
+        f"Date range  : {df['DATE'].min().date()} → {df['DATE'].max().date()}"
     )
 
     # --------------------------------------------------
     # SCHEMA CHECK
     # --------------------------------------------------
     print("\n📐 SCHEMA CHECK")
-    print("✅ Required columns resolved dynamically")
+    missing = REQUIRED_COLS - set(df.columns)
+    if missing:
+        print(f"❌ Missing columns : {missing}")
+        return
+    else:
+        print("✅ Required columns OK")
 
     # --------------------------------------------------
     # DATA TYPES
@@ -86,7 +81,7 @@ def main():
     # MISSING VALUES
     # --------------------------------------------------
     print("\n📉 MISSING VALUES (non-zero only)")
-    na = df[[DATE_COL, OPEN, HIGH, LOW, CLOSE, SYMBOL]].isna().sum()
+    na = df.isna().sum()
     na = na[na > 0]
     print(na if not na.empty else "✅ No missing values")
 
@@ -96,19 +91,19 @@ def main():
     print(f"\n🔁 DUPLICATE ROWS : {df.duplicated().sum()}")
 
     # --------------------------------------------------
-    # OHLC LOGIC
+    # OHLC LOGIC CHECK
     # --------------------------------------------------
     print("\n📊 OHLC LOGIC CHECK")
     bad_ohlc = df[
-        (df[HIGH] < df[LOW]) |
-        (df[CLOSE] > df[HIGH]) |
-        (df[CLOSE] < df[LOW]) |
-        (df[OPEN] > df[HIGH]) |
-        (df[OPEN] < df[LOW])
+        (df["HIGH"] < df["LOW"]) |
+        (df["CLOSE"] > df["HIGH"]) |
+        (df["CLOSE"] < df["LOW"]) |
+        (df["OPEN"] > df["HIGH"]) |
+        (df["OPEN"] < df["LOW"])
     ]
 
     if len(bad_ohlc) > 0:
-        print(f"❌ OHLC errors : {len(bad_ohlc)}")
+        print(f"❌ OHLC logic errors : {len(bad_ohlc)}")
         print(bad_ohlc.head())
     else:
         print("✅ OHLC logic valid")
@@ -116,23 +111,23 @@ def main():
     # --------------------------------------------------
     # PRICE SANITY
     # --------------------------------------------------
-    print("\n💰 PRICE SANITY")
+    print("\n💰 PRICE SANITY CHECK")
     bad_price = df[
-        (df[OPEN] <= 0) |
-        (df[HIGH] <= 0) |
-        (df[LOW] <= 0) |
-        (df[CLOSE] <= 0)
+        (df["OPEN"] <= 0) |
+        (df["HIGH"] <= 0) |
+        (df["LOW"] <= 0) |
+        (df["CLOSE"] <= 0)
     ]
 
     if len(bad_price) > 0:
-        print(f"❌ Bad prices : {len(bad_price)}")
+        print(f"❌ Zero / negative prices : {len(bad_price)}")
     else:
-        print("✅ Prices valid")
+        print("✅ Prices are positive")
 
     # --------------------------------------------------
-    # VOLUME SANITY
+    # VOLUME CHECK (index allows zero)
     # --------------------------------------------------
-    neg_vol = df[df[VOLUME] < 0]
+    neg_vol = df[df["VOLUME"] < 0]
     if len(neg_vol) > 0:
         print(f"❌ Negative volume rows : {len(neg_vol)}")
     else:
