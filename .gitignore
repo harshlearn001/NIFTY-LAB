@@ -1,7 +1,13 @@
 # =====================
 # DATA (DO NOT PUSH)
 # =====================
+# Ignore all data outputs
 data/
+
+# Allow README files inside data folders (documentation only)
+!data/**/README.md
+
+# Extra safety: never push data formats
 *.parquet
 *.csv
 *.zip
@@ -11,6 +17,8 @@ data/
 # =====================
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
 # =====================
 # Environments
@@ -18,3 +26,11 @@ __pycache__/
 .env
 .env.*
 .ipynb_checkpoints/
+
+# =====================
+# OS / Editor junk
+# =====================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
