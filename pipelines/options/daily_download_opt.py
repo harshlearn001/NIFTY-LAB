@@ -45,44 +45,43 @@ HEADERS = {
 # --------------------------------------------------
 # MAIN
 # --------------------------------------------------
+from datetime import timedelta
+
 def main(trade_date):
     print("NIFTY-LAB | DAILY OPTIONS DOWNLOAD (AUTO)")
     print("-" * 60)
-    print(f"Trade Date : {trade_date}")
 
-    # ------------------------------
-    # Weekend guard
-    # ------------------------------
-    if trade_date.weekday() >= 5:
-        print("Weekend detected — NSE FO closed")
-        return
+    for i in range(0, 7):  # look back up to 7 days
+        d = trade_date - timedelta(days=i)
 
-    tag = trade_date.strftime("%d%m%Y")
-    url = BASE_URL.format(date=tag)
+        print(f"📅 Trying FO bhavcopy for {d}")
 
-    out = OUT_DIR / f"fo_{trade_date:%Y-%m-%d}.zip"
+        if d.weekday() >= 5:
+            print("  ⏭ Weekend — skipped")
+            continue
 
-    if out.exists():
-        print(f"Already downloaded : {out.name}")
-        return
+        out = OUT_DIR / f"fo_{d:%Y-%m-%d}.zip"
+        if out.exists():
+            print(f"  ✅ Already exists → {out.name}")
+            return
 
-    print(f"URL : {url}")
+        tag = d.strftime("%d%m%Y")
+        url = BASE_URL.format(date=tag)
 
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=20)
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=20)
 
-        if r.status_code == 200 and len(r.content) > 50_000:
-            out.write_bytes(r.content)
-            print("Download successful")
-            print(f"Saved : {out}")
-        else:
-            print("FO bhavcopy not available (holiday / not released yet)")
+            if r.status_code == 200 and len(r.content) > 50_000:
+                out.write_bytes(r.content)
+                print(f"  ✅ Downloaded & saved → {out.name}")
+                return
+            else:
+                print("  ⚠️ Not available")
 
-    except requests.RequestException as e:
-        print(f"Network error : {e}")
+        except requests.RequestException as e:
+            print(f"  ❌ Network error : {e}")
 
-    print("DONE")
-
+    raise RuntimeError("❌ No FO bhavcopy found in recent days")
 
 # --------------------------------------------------
 # CLI

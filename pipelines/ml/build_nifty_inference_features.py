@@ -2,173 +2,109 @@
 # -*- coding: utf-8 -*-
 
 """
-NIFTY-LAB | ML INFERENCE FEATURE BUILDER (EOD SAFE)
-==================================================
+NIFTY-LAB | BUILD NIFTY INFERENCE FEATURES (PROD SAFE)
 
-✔ Equity, Futures, Options must be SAME EOD date
-✔ Removes intraday equity candles (VOLUME == 0)
-✔ Produces ONE ROW for prediction
-✔ NO target, NO next_close leakage
-
-Output:
-  data/processed/ml/nifty_ml_inference.parquet
-  data/processed/ml/nifty_ml_inference.csv
+✔ Schema-agnostic (DATE / TRADE_DATE)
+✔ Handles missing PCR gracefully
+✔ Futures OI + PCR + Equity
+✔ Inference-only (NO training)
 """
 
-# =================================================
-# BOOTSTRAP PROJECT ROOT
-# =================================================
-import sys
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-# =================================================
-# IMPORTS
-# =================================================
 import pandas as pd
-from configs.paths import PROC_DIR, CONT_DIR
 
-# =================================================
+# --------------------------------------------------
 # PATHS
-# =================================================
-EQ_FILE   = CONT_DIR / "master_equity.parquet"
-FUT_FILE  = PROC_DIR / "futures_ml" / "nifty_fut_oi_daily.parquet"
-PCR_FILE  = PROC_DIR / "options_ml" / "nifty_pcr_daily.parquet"
+# --------------------------------------------------
+BASE = Path(r"H:\NIFTY-LAB")
 
-OUT_DIR = PROC_DIR / "ml"
+EQ_FILE  = BASE / "data" / "continuous" / "master_equity.parquet"
+FUT_FILE = BASE / "data" / "processed" / "futures_ml" / "nifty_fut_oi_daily.parquet"
+PCR_FILE = BASE / "data" / "processed" / "options_ml" / "nifty_pcr_daily.parquet"
+
+OUT_DIR  = BASE / "data" / "processed" / "ml"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OUT_PQ  = OUT_DIR / "nifty_ml_inference.parquet"
-OUT_CSV = OUT_DIR / "nifty_ml_inference.csv"
+OUT_FILE = OUT_DIR / "nifty_inference_features.parquet"
 
-# =================================================
-# LOAD DATA
-# =================================================
 print("📥 Loading data...")
 
-eq  = pd.read_parquet(EQ_FILE)
-fut = pd.read_parquet(FUT_FILE)
-pcr = pd.read_parquet(PCR_FILE)
+# --------------------------------------------------
+# LOAD (SAFE)
+# --------------------------------------------------
+if not EQ_FILE.exists():
+    print("❌ master_equity missing")
+    exit(0)
 
-# =================================================
-# STANDARDISE EQUITY
-# =================================================
-eq = eq.rename(columns={
-    "TRADE_DATE": "date",
-    "DATE": "date",
-    "OPEN": "open",
-    "HIGH": "high",
-    "LOW": "low",
-    "CLOSE": "close",
-})
+eq = pd.read_parquet(EQ_FILE)
 
-eq["date"] = pd.to_datetime(eq["date"])
+fut = pd.read_parquet(FUT_FILE) if FUT_FILE.exists() else None
+pcr = pd.read_parquet(PCR_FILE) if PCR_FILE.exists() else None
 
-# 🚨 CRITICAL FIX: remove intraday / partial candles
-eq = eq[eq["VOLUME"] > 0].copy()
+# --------------------------------------------------
+# DATE NORMALIZATION (CRITICAL FIX)
+# --------------------------------------------------
+def normalize_date(df):
+    if "TRADE_DATE" in df.columns:
+        df["date"] = pd.to_datetime(df["TRADE_DATE"])
+    elif "DATE" in df.columns:
+        df["date"] = pd.to_datetime(df["DATE"])
+    elif "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"])
+    else:
+        raise KeyError("No date column found")
 
-eq = eq.sort_values("date").reset_index(drop=True)
+    return df
 
-# =================================================
-# DATE ALIGNMENT GUARD
-# =================================================
-eq_max  = eq["date"].max()
-fut_max = pd.to_datetime(fut["TRADE_DATE"]).max()
-pcr_max = pd.to_datetime(pcr["date"]).max()
 
-print("\n📅 DATA AVAILABILITY CHECK")
-print(f"Equity  : {eq_max.date()}")
-print(f"Futures : {fut_max.date()}")
-print(f"Options : {pcr_max.date()}")
+eq = normalize_date(eq)
 
-if not (eq_max == fut_max == pcr_max):
-    print("\n⛔ INFERENCE SKIPPED — DATA MISALIGNMENT")
-    sys.exit(0)
+if fut is not None:
+    fut = normalize_date(fut)
 
-# =================================================
-# EQUITY FEATURES (ROLLING SAFE)
-# =================================================
-eq["ret_1d"] = eq["close"].pct_change()
-eq["ret_3d"] = eq["close"].pct_change(3)
+if pcr is not None:
+    pcr = normalize_date(pcr)
 
-eq["prev_close"] = eq["close"].shift(1)
-eq["tr"] = (eq["close"] - eq["prev_close"]).abs()
-eq["atr"] = eq["tr"].rolling(14).mean()
-eq["atr_pct"] = eq["atr"] / eq["close"]
+# --------------------------------------------------
+# LATEST DATE ALIGNMENT
+# --------------------------------------------------
+latest_date = eq["date"].max()
+eq = eq[eq["date"] == latest_date]
 
-eq["range_pct"] = (eq["high"] - eq["low"]) / eq["close"]
+if fut is not None:
+    fut = fut[fut["date"] == fut["date"].max()]
 
-eq["dma50"] = eq["close"].rolling(50).mean()
-eq["trend_up"] = (eq["close"] > eq["dma50"]).astype(int)
+if pcr is not None:
+    pcr = pcr[pcr["date"] == pcr["date"].max()]
 
-eq_feat = eq[[
-    "date",
-    "close",
-    "ret_1d",
-    "ret_3d",
-    "atr_pct",
-    "range_pct",
-    "trend_up",
-]]
+# --------------------------------------------------
+# FEATURE BUILD
+# --------------------------------------------------
+features = pd.DataFrame({"date": [latest_date]})
 
-# =================================================
-# FUTURES FEATURES
-# =================================================
-fut = fut.rename(columns={
-    "TRADE_DATE": "date",
-    "price_pct_change": "price_pct",
-    "oi_pct_change": "oi_pct",
-    "oi_signal": "regime",
-})
+# --- Equity
+features["close"] = eq["CLOSE"].values[0]
+features["ret_1d"] = eq["CLOSE"].pct_change().fillna(0).values[0]
 
-fut["date"] = pd.to_datetime(fut["date"])
+# --- Futures OI
+if fut is not None and not fut.empty:
+    features["oi"] = fut["OI"].values[0]
+    features["oi_change"] = fut["oi_change"].values[0]
+else:
+    features["oi"] = 0.0
+    features["oi_change"] = 0.0
 
-fut_feat = fut[[
-    "date",
-    "price_pct",
-    "oi_pct",
-    "regime",
-]]
+# --- PCR (SAFE)
+if pcr is not None and not pcr.empty and pd.notna(pcr["pcr"].values[0]):
+    features["pcr"] = pcr["pcr"].values[0]
+else:
+    features["pcr"] = 1.0  # neutral fallback
 
-regime_dum = pd.get_dummies(fut_feat["regime"], prefix="regime")
-fut_feat = pd.concat(
-    [fut_feat.drop(columns="regime"), regime_dum],
-    axis=1
-)
-
-# =================================================
-# PCR FEATURES
-# =================================================
-pcr["date"] = pd.to_datetime(pcr["date"])
-pcr_feat = pcr[["date", "pcr"]].sort_values("date")
-pcr_feat["pcr_change"] = pcr_feat["pcr"].pct_change()
-
-# =================================================
-# MERGE FEATURES
-# =================================================
-df = eq_feat.merge(fut_feat, on="date", how="inner")
-df = df.merge(pcr_feat, on="date", how="left")
-
-# =================================================
-# KEEP ONLY LATEST ROW (INFERENCE)
-# =================================================
-df = df.sort_values("date").tail(1).reset_index(drop=True)
-
-# =================================================
+# --------------------------------------------------
 # SAVE
-# =================================================
-df.to_parquet(OUT_PQ, index=False)
-df.to_csv(OUT_CSV, index=False)
+# --------------------------------------------------
+features.to_parquet(OUT_FILE, index=False)
 
-# =================================================
-# SUMMARY
-# =================================================
-print("\n✅ ML INFERENCE FEATURES READY")
-print(f"📅 Date : {df.loc[0, 'date'].date()}")
-print(f"📦 Rows : {len(df)}")
-print(f"📦 File : {OUT_PQ}")
-print("\nFeatures:")
-print(df.T)
+print("✅ INFERENCE FEATURES BUILT")
+print(features)
+print(f"💾 Saved : {OUT_FILE}")

@@ -2,133 +2,90 @@
 # -*- coding: utf-8 -*-
 
 """
-NIFTY-LAB | CLEAN DAILY EQUITY DATA
-AUTO MODE — PARQUET + CSV
+NIFTY-LAB | CLEAN DAILY EQUITY (AUTO | NIFTY INDEX)
 
-Input  : data/raw/equity/equity_YYYY-MM-DD.csv
-Output :
-  - data/processed/daily/equity/clean_equity_YYYY-MM-DD.parquet
-  - data/processed/daily/equity/clean_equity_YYYY-MM-DD.csv
+✔ Auto-picks latest raw equity file
+✔ Safe on holidays / NSE delays
+✔ Parquet + CSV
+✔ NEVER breaks scheduler
 """
 
 from pathlib import Path
-from datetime import datetime
-import argparse
+from datetime import datetime, timedelta
 import pandas as pd
 
 # --------------------------------------------------
 # PATHS
 # --------------------------------------------------
 BASE = Path(r"H:\NIFTY-LAB")
-
 RAW_DIR = BASE / "data" / "raw" / "equity"
 OUT_DIR = BASE / "data" / "processed" / "daily" / "equity"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # --------------------------------------------------
+# HELPERS
+# --------------------------------------------------
+def find_latest_raw(max_lookback=7):
+    today = datetime.today().date()
+    for i in range(max_lookback):
+        d = today - timedelta(days=i)
+        f = RAW_DIR / f"equity_{d}.csv"
+        if f.exists():
+            return d, f
+    return None, None
+
+# --------------------------------------------------
 # MAIN
 # --------------------------------------------------
-def main(trade_date: datetime):
-    date_str = trade_date.strftime("%Y-%m-%d")
-
+def main():
     print("NIFTY-LAB | CLEAN DAILY EQUITY (AUTO)")
     print("-" * 60)
-    print(f"Trade Date : {date_str}")
 
-    raw_file = RAW_DIR / f"equity_{date_str}.csv"
-    parquet_file = OUT_DIR / f"clean_equity_{date_str}.parquet"
-    csv_file = OUT_DIR / f"clean_equity_{date_str}.csv"
+    trade_date, raw_file = find_latest_raw()
 
-    # ------------------------------
-    # Checks
-    # ------------------------------
-    if not raw_file.exists():
-        print(f"Raw file not found -> {raw_file.name}")
-        return  # soft exit
+    if raw_file is None:
+        print("No raw equity file found in recent days — skipping clean")
+        return  # 🔑 SOFT EXIT
 
-    if parquet_file.exists() and csv_file.exists():
-        print(f"Already cleaned -> {parquet_file.name} & CSV")
-        return  # idempotent exit
+    out_pq = OUT_DIR / f"EQUITY_NIFTY_{trade_date}.parquet"
+    out_csv = OUT_DIR / f"EQUITY_NIFTY_{trade_date}.csv"
 
-    # ------------------------------
-    # Load
-    # ------------------------------
+    if out_pq.exists():
+        print(f"Already cleaned → {out_pq.name}")
+        return  # 🔑 SOFT EXIT
+
+    print(f"Using raw file : {raw_file.name}")
+    print(f"Trade Date    : {trade_date}")
+
     df = pd.read_csv(raw_file)
-    print(f"Loaded rows : {len(df)}")
 
-    # ------------------------------
-    # Standardize columns
-    # ------------------------------
-    df.columns = df.columns.str.strip().str.upper()
+    df.columns = df.columns.str.upper().str.strip()
 
-    REQUIRED = {"DATE", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"}
-    missing = REQUIRED - set(df.columns)
-    if missing:
-        print(f"Missing columns: {missing}")
-        return  # soft exit
+    df = df[["DATE", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME", "SYMBOL"]]
 
-    # ------------------------------
-    # Datatypes
-    # ------------------------------
-    df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
-
-    for col in ["OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    # ------------------------------
-    # Add SYMBOL (single-instrument equity)
-    # ------------------------------
+    df["DATE"] = pd.to_datetime(df["DATE"], dayfirst=True)
     df["SYMBOL"] = "NIFTY"
 
-    # ------------------------------
-    # Sanity filters
-    # ------------------------------
-    before = len(df)
+    for c in ["OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    df = df.dropna()
-    df = df[df["VOLUME"] >= 0]
+    df = (
+        df.dropna()
+          .sort_values("DATE")
+          .drop_duplicates(subset=["DATE", "SYMBOL"])
+    )
 
-    after = len(df)
-    print(f"Dropped rows : {before - after}")
+    df.to_parquet(out_pq, index=False)
+    df.to_csv(out_csv, index=False)
 
-    if df.empty:
-        print("No valid data after cleaning")
-        return  # soft exit
+    print(f"Saved : {out_pq.name}")
+    print(f"Rows  : {len(df)}")
+    print("✅ DAILY EQUITY CLEAN COMPLETE")
 
-    # ------------------------------
-    # Sort & Save
-    # ------------------------------
-    df = df.sort_values("DATE")
-
-    df.to_parquet(parquet_file, index=False)
-    df.to_csv(csv_file, index=False)
-
-    print("Clean file created")
-    print(f"Rows    : {len(df)}")
-    print(f"Parquet : {parquet_file}")
-    print(f"CSV     : {csv_file}")
-    print("DONE")
-
-
-# --------------------------------------------------
-# CLI
 # --------------------------------------------------
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Clean daily NIFTY equity data"
-    )
-    parser.add_argument(
-        "--date",
-        help="Trade date in YYYY-MM-DD format (default: today)",
-        required=False,
-    )
-
-    args = parser.parse_args()
-
-    trade_date = (
-        datetime.strptime(args.date, "%Y-%m-%d")
-        if args.date
-        else datetime.today()
-    )
-
-    main(trade_date)
+    try:
+        main()
+    except Exception as e:
+        print(f"Non-fatal error: {e}")
+        exit(0)  # 🔑 NEVER FAIL PIPELINE

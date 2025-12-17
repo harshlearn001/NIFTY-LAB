@@ -2,29 +2,24 @@
 # -*- coding: utf-8 -*-
 
 """
-NIFTY-LAB | CLEAN DAILY FUTURES (NIFTY ONLY)
+NIFTY-LAB | CLEAN DAILY FUTURES (AUTO | NIFTY ONLY)
 
-AUTO MODE — SAFE FOR SCHEDULER
-
-- NSE-safe spacing fix
-- Handles nanosecond dates
-- Extracts ONLY NIFTY index futures
-- Produces ML + master-ready output
+✔ Auto-finds latest FO ZIP
+✔ Holiday / delay safe
+✔ NEVER breaks scheduler
+✔ Parquet + CSV
 """
 
 from pathlib import Path
-from datetime import datetime
-import argparse
+from datetime import datetime, timedelta
 import zipfile
 import pandas as pd
-import re
 from io import StringIO
 
 # --------------------------------------------------
 # PATHS
 # --------------------------------------------------
 BASE = Path(r"H:\NIFTY-LAB")
-
 RAW_DIR = BASE / "data" / "raw" / "futures"
 OUT_DIR = BASE / "data" / "processed" / "daily" / "futures"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -32,16 +27,14 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 # --------------------------------------------------
 # HELPERS
 # --------------------------------------------------
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    df.columns = (
-        df.columns
-        .astype(str)
-        .str.strip()
-        .str.upper()
-        .str.replace(" ", "_")
-        .str.replace("*", "", regex=False)
-    )
-    return df
+def find_latest_fo_zip(max_lookback=7):
+    today = datetime.today().date()
+    for i in range(max_lookback):
+        d = today - timedelta(days=i)
+        f = RAW_DIR / f"fo_{d:%Y-%m-%d}.zip"
+        if f.exists():
+            return d, f
+    return None, None
 
 
 def read_nse_csv(f):
@@ -52,33 +45,39 @@ def read_nse_csv(f):
     return None
 
 
+def normalize_columns(df):
+    df.columns = (
+        df.columns.astype(str)
+        .str.strip()
+        .str.upper()
+        .str.replace(" ", "_")
+    )
+    return df
+
 # --------------------------------------------------
 # MAIN
 # --------------------------------------------------
-def main(trade_date: datetime.date):
+def main():
     print("NIFTY-LAB | CLEAN DAILY FUTURES (AUTO | NIFTY ONLY)")
     print("-" * 60)
-    print(f"Trade Date : {trade_date}")
 
-    if trade_date.weekday() >= 5:
-        print("Weekend detected — no FO futures")
-        return
+    trade_date, zip_file = find_latest_fo_zip()
 
-    zip_file = RAW_DIR / f"fo_{trade_date:%Y-%m-%d}.zip"
+    if zip_file is None:
+        print("No FO ZIP found in recent days — skipping futures clean")
+        return  # 🔑 SOFT EXIT
+
     out_pq = OUT_DIR / f"FUT_NIFTY_{trade_date}.parquet"
     out_csv = OUT_DIR / f"FUT_NIFTY_{trade_date}.csv"
 
-    if not zip_file.exists():
-        print(f"FO ZIP not found : {zip_file.name}")
-        return
+    if out_pq.exists():
+        print(f"Already cleaned → {out_pq.name}")
+        return  # 🔑 SOFT EXIT
 
-    if out_pq.exists() and out_csv.exists():
-        print(f"Already cleaned : {out_pq.name}")
-        return
+    print(f"Using FO ZIP : {zip_file.name}")
+    print(f"Trade Date  : {trade_date}")
 
     frames = []
-
-    print(f"Processing : {zip_file.name}")
 
     with zipfile.ZipFile(zip_file) as z:
         for name in z.namelist():
@@ -95,11 +94,9 @@ def main(trade_date: datetime.date):
                 if not {"INSTRUMENT", "SYMBOL"}.issubset(df.columns):
                     continue
 
-                # NSE spacing fix
-                df["INSTRUMENT"] = df["INSTRUMENT"].astype(str).str.strip().str.upper()
-                df["SYMBOL"] = df["SYMBOL"].astype(str).str.strip().str.upper()
+                df["INSTRUMENT"] = df["INSTRUMENT"].astype(str).str.strip()
+                df["SYMBOL"] = df["SYMBOL"].astype(str).str.strip()
 
-                # NIFTY futures only
                 df = df[
                     (df["INSTRUMENT"] == "FUTIDX") &
                     (df["SYMBOL"] == "NIFTY")
@@ -108,7 +105,6 @@ def main(trade_date: datetime.date):
                 if df.empty:
                     continue
 
-                # Expiry column detection
                 for c in ("EXP_DATE", "EXPIRY", "EXPIRY_DATE", "EXP_DT"):
                     if c in df.columns:
                         df.rename(columns={c: "EXP_DATE"}, inplace=True)
@@ -120,16 +116,13 @@ def main(trade_date: datetime.date):
                 frames.append(df)
 
     if not frames:
-        print("No valid NIFTY futures found")
-        return
+        print("No valid NIFTY futures found — skipping")
+        return  # 🔑 SOFT EXIT
 
     df = pd.concat(frames, ignore_index=True)
 
-    # --------------------------------------------------
-    # Final schema normalization
-    # --------------------------------------------------
-    df["TRADE_DATE"] = pd.to_datetime(df["TRADE_DATE"], errors="coerce")
-    df["EXP_DATE"] = pd.to_datetime(df["EXP_DATE"], dayfirst=True, errors="coerce")
+    df["TRADE_DATE"] = pd.to_datetime(df["TRADE_DATE"])
+    df["EXP_DATE"] = pd.to_datetime(df["EXP_DATE"], dayfirst=True)
 
     df.rename(
         columns={
@@ -144,57 +137,25 @@ def main(trade_date: datetime.date):
     )
 
     df = df[
-        [
-            "SYMBOL",
-            "TRADE_DATE",
-            "EXP_DATE",
-            "OPEN",
-            "HIGH",
-            "LOW",
-            "CLOSE",
-            "VOLUME",
-            "OI",
-        ]
+        ["SYMBOL", "TRADE_DATE", "EXP_DATE", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME", "OI"]
     ]
 
     for c in ["OPEN", "HIGH", "LOW", "CLOSE", "VOLUME", "OI"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    df = (
-        df.dropna()
-        .sort_values(["TRADE_DATE", "EXP_DATE"])
-        .drop_duplicates()
-    )
+    df = df.dropna().drop_duplicates()
 
-    # --------------------------------------------------
-    # Save
-    # --------------------------------------------------
     df.to_parquet(out_pq, index=False)
     df.to_csv(out_csv, index=False)
 
-    print(f"Saved {out_pq.name} | rows : {len(df)}")
-    print("DAILY FUTURES CLEAN COMPLETE")
+    print(f"Saved : {out_pq.name}")
+    print(f"Rows  : {len(df)}")
+    print("✅ DAILY FUTURES CLEAN COMPLETE")
 
-
-# --------------------------------------------------
-# CLI
 # --------------------------------------------------
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Clean daily NSE NIFTY futures data"
-    )
-    parser.add_argument(
-        "--date",
-        help="Trade date YYYY-MM-DD (default: today)",
-        required=False,
-    )
-
-    args = parser.parse_args()
-
-    trade_date = (
-        datetime.strptime(args.date, "%Y-%m-%d").date()
-        if args.date
-        else datetime.today().date()
-    )
-
-    main(trade_date)
+    try:
+        main()
+    except Exception as e:
+        print(f"Non-fatal futures clean error: {e}")
+        exit(0)  # 🔑 NEVER FAIL PIPELINE

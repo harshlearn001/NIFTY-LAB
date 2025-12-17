@@ -44,43 +44,43 @@ HEADERS = {
 # --------------------------------------------------
 # MAIN
 # --------------------------------------------------
+from datetime import timedelta
+
 def main(trade_date):
     print("NIFTY-LAB | DAILY FUTURES DOWNLOAD (AUTO)")
     print("-" * 60)
-    print(f"Trade Date : {trade_date}")
 
-    # ------------------------------
-    # Weekend guard
-    # ------------------------------
-    if trade_date.weekday() >= 5:
-        print("Weekend detected — NSE FO closed")
-        return
+    for i in range(0, 7):  # look back up to 7 days
+        d = trade_date - timedelta(days=i)
 
-    out_file = OUT_DIR / f"fo_{trade_date:%Y-%m-%d}.zip"
+        print(f"📅 Trying FO bhavcopy for {d}")
 
-    if out_file.exists():
-        print(f"Already downloaded : {out_file.name}")
-        return
+        if d.weekday() >= 5:
+            print("  ⏭ Weekend — skipped")
+            continue
 
-    d_nse = trade_date.strftime("%d%m%Y")
-    url = BASE_URL.format(date=d_nse)
+        out_file = OUT_DIR / f"fo_{d:%Y-%m-%d}.zip"
+        if out_file.exists():
+            print(f"  ✅ Already exists → {out_file.name}")
+            return
 
-    print(f"URL : {url}")
+        d_nse = d.strftime("%d%m%Y")
+        url = BASE_URL.format(date=d_nse)
 
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=20)
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=20)
 
-        if r.status_code == 200 and len(r.content) > 50_000:
-            out_file.write_bytes(r.content)
+            if r.status_code == 200 and len(r.content) > 50_000:
+                out_file.write_bytes(r.content)
+                print(f"  ✅ Downloaded & saved → {out_file.name}")
+                return
+            else:
+                print("  ⚠️ Not available")
 
-            print("Download successful")
-            print(f"Saved : {out_file}")
-            print("DONE")
-        else:
-            print("FO bhavcopy not available (holiday / not released yet)")
+        except requests.RequestException as e:
+            print(f"  ❌ Network error : {e}")
 
-    except requests.RequestException as e:
-        print(f"Network error : {e}")
+    raise RuntimeError("❌ No FO bhavcopy found in recent days")
 
 
 # --------------------------------------------------

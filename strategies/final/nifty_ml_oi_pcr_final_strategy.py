@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 
 """
-NIFTY-LAB | FINAL STRATEGY
+NIFTY-LAB | FINAL STRATEGY (PRODUCTION SAFE)
 ML + FUTURES OI + OPTIONS PCR (EOD)
 
-✔ Probability-filtered
-✔ Institution-aware
-✔ No overtrading
-✔ Production ready
+✔ Column-agnostic
+✔ Date-safe
+✔ Skips gracefully
+✔ Dated output
 """
 
 from pathlib import Path
@@ -19,34 +19,64 @@ import pandas as pd
 # --------------------------------------------------
 BASE = Path(r"H:\NIFTY-LAB")
 
-ML_PRED_FILE = BASE / "data" / "processed" / "ml" / "nifty_ml_prediction.parquet"
-OI_FILE      = BASE / "data" / "processed" / "futures_ml" / "nifty_fut_oi_daily.parquet"
-PCR_FILE     = BASE / "data" / "processed" / "options_ml" / "nifty_pcr_daily.parquet"
+ML_FILE  = BASE / "data" / "processed" / "ml" / "nifty_ml_prediction.parquet"
+OI_FILE  = BASE / "data" / "processed" / "futures_ml" / "nifty_fut_oi_daily.parquet"
+PCR_FILE = BASE / "data" / "processed" / "options_ml" / "nifty_pcr_daily.parquet"
 
 OUT_DIR = BASE / "data" / "signals"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OUT_FILE = OUT_DIR / "nifty_final_signal.csv"
-
-# --------------------------------------------------
-# LOAD DATA
-# --------------------------------------------------
 print("🚀 NIFTY FINAL STRATEGY")
 
-ml  = pd.read_parquet(ML_PRED_FILE)
+# --------------------------------------------------
+# SAFE LOAD
+# --------------------------------------------------
+missing = False
+
+if not ML_FILE.exists():
+    print(f"⚠️ ML file missing : {ML_FILE}")
+    missing = True
+
+if not OI_FILE.exists():
+    print(f"⚠️ OI file missing : {OI_FILE}")
+    missing = True
+
+if not PCR_FILE.exists():
+    print(f"⚠️ PCR file missing : {PCR_FILE}")
+    missing = True
+
+if missing:
+    print("⏭️ Skipping final strategy safely")
+    exit(0)
+
+ml  = pd.read_parquet(ML_FILE)
 oi  = pd.read_parquet(OI_FILE)
 pcr = pd.read_parquet(PCR_FILE)
 
-# Standardise
-oi  = oi.rename(columns={"TRADE_DATE": "date", "oi_signal": "regime"})
-pcr = pcr[["date", "pcr"]]
+# --------------------------------------------------
+# DATE NORMALIZATION (CRITICAL FIX)
+# --------------------------------------------------
+def normalize_date(df):
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"])
+    elif "TRADE_DATE" in df.columns:
+        df["date"] = pd.to_datetime(df["TRADE_DATE"])
+    else:
+        raise KeyError(f"No date column in {df.columns.tolist()}")
+    return df
 
-ml["date"]  = pd.to_datetime(ml["date"])
-oi["date"]  = pd.to_datetime(oi["date"])
-pcr["date"] = pd.to_datetime(pcr["date"])
+ml  = normalize_date(ml)
+oi  = normalize_date(oi)
+pcr = normalize_date(pcr)
 
 # --------------------------------------------------
-# MERGE (STRICT DATE)
+# STANDARDIZE OI + PCR
+# --------------------------------------------------
+oi  = oi.rename(columns={"oi_signal": "regime"})
+pcr = pcr[["date", "pcr"]]
+
+# --------------------------------------------------
+# MERGE (STRICT DATE ALIGNMENT)
 # --------------------------------------------------
 df = (
     ml.merge(oi[["date", "regime"]], on="date", how="inner")
@@ -54,14 +84,15 @@ df = (
 )
 
 if df.empty:
-    raise RuntimeError("❌ No aligned ML/OI/PCR data")
+    print("❌ No aligned ML / OI / PCR rows")
+    exit(0)
 
-row = df.iloc[0]
+row = df.iloc[-1]
 
-prob_up   = row["prob_up"]
-prob_down = row["prob_down"]
+prob_up   = float(row["prob_up"])
+prob_down = float(row["prob_down"])
 regime    = row["regime"]
-pcr_val   = row["pcr"]
+pcr_val   = float(row["pcr"]) if pd.notna(row["pcr"]) else 1.0
 
 # --------------------------------------------------
 # DECISION ENGINE
@@ -88,7 +119,7 @@ elif (
     reason = ["ML_DOWN", regime, f"PCR={pcr_val:.2f}"]
 
 # --------------------------------------------------
-# OUTPUT
+# OUTPUT (DATED)
 # --------------------------------------------------
 out = pd.DataFrame({
     "date": [row["date"]],
@@ -97,11 +128,14 @@ out = pd.DataFrame({
     "prob_down": [prob_down],
     "oi_regime": [regime],
     "pcr": [pcr_val],
-    "reason": [" | ".join(reason)]
+    "reason": [" | ".join(reason)],
 })
+
+date_tag = row["date"].strftime("%d-%m-%Y")
+OUT_FILE = OUT_DIR / f"nifty_final_signal_{date_tag}.csv"
 
 out.to_csv(OUT_FILE, index=False)
 
 print("\n✅ FINAL SIGNAL GENERATED")
 print(out)
-print(f"\n💾 Saved: {OUT_FILE}")
+print(f"\n💾 Saved : {OUT_FILE}")

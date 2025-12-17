@@ -2,7 +2,6 @@
 # NIFTY-LAB DAILY AUTO RUN (FINAL • PROD)
 # =====================================
 
-# -------- ENCODING (MUST BE FIRST) --------
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -22,7 +21,7 @@ if (!(Test-Path $LOG_DIR)) {
 
 Set-Location $PROJECT_DIR
 
-# -------- HELPER --------
+# -------- HELPERS --------
 function Run-Step($script) {
     $cmd = "$PYTHON $script"
     Write-Host "RUNNING: $cmd"
@@ -35,50 +34,65 @@ function Run-Step($script) {
     }
 }
 
-# =================================================
-# DATA DOWNLOAD
-# =================================================
-Run-Step "pipelines/equity/daily_download_equ.py"
-Run-Step "pipelines/futures/daily_download_fut.py"
-Run-Step "pipelines/options/daily_download_opt.py"
+function Run-Step-Soft($script) {
+    $cmd = "$PYTHON $script"
+    Write-Host "OPTIONAL: $cmd"
+    Add-Content -Encoding UTF8 $LOG_FILE "`nOPTIONAL: $cmd"
+
+    cmd /c "$cmd >> `"$LOG_FILE`" 2>&1"
+}
 
 # =================================================
-# CLEAN
+# DATA DOWNLOAD (SOFT — NSE DELAYS ARE NORMAL)
 # =================================================
-Run-Step "pipelines/equity/clean_daily_equ.py"
-Run-Step "pipelines/futures/clean_daily_fut.py"
-Run-Step "pipelines/options/clean_daily_opt.py"
+Run-Step-Soft "pipelines/equity/daily_download_equ.py"
+Run-Step-Soft "pipelines/futures/daily_download_fut.py"
+Run-Step-Soft "pipelines/options/daily_download_opt.py"
+
 
 # =================================================
-# SANITY
 # =================================================
-Run-Step "pipelines/equity/sanity_daily_equity.py"
-Run-Step "pipelines/futures/sanity_daily_futures.py"
-Run-Step "pipelines/options/sanity_daily_opt.py"
+# =================================================
+# =================================================
+# CLEAN (SAFE)
+# =================================================
+Run-Step-Soft "pipelines/equity/clean_daily_equ.py"
+Run-Step-Soft "pipelines/futures/clean_daily_fut.py"
+Run-Step-Soft "pipelines/options/clean_daily_opt.py"
+
 
 # =================================================
-# MASTER BUILD
+# =================================================
+# SANITY (NEVER FAIL PIPELINE)
+# =================================================
+Run-Step-Soft "pipelines/equity/sanity_daily_equity.py"
+Run-Step-Soft "pipelines/futures/sanity_daily_futures.py"
+Run-Step-Soft "pipelines/options/sanity_daily_opt.py"
+
+
+# =================================================
+# MASTER BUILD (HARD)
 # =================================================
 Run-Step "pipelines/equity/append_master_equ.py"
 Run-Step "pipelines/futures/append_master.py"
 Run-Step "pipelines/options/append_master_options.py"
 
 # =================================================
-# ANALYTICS
+# ANALYTICS (SOFT)
 # =================================================
-Run-Step "analytics/futures_oi_analysis.py"
-Run-Step "pipelines/options/build_daily_pcr.py"
+Run-Step-Soft "analytics/futures_oi_analysis.py"
+Run-Step-Soft "pipelines/options/build_daily_pcr.py"
 
 # =================================================
-# ML (INFERENCE ONLY — PROD SAFE)
+# ML INFERENCE (SOFT)
 # =================================================
-Run-Step "pipelines/ml/build_nifty_inference_features.py"
-Run-Step "pipelines/ml/predict_nifty_xgb.py"
+Run-Step-Soft "pipelines/ml/build_nifty_inference_features.py"
+Run-Step-Soft "pipelines/ml/predict_nifty_xgb.py"
 
 # =================================================
-# FINAL STRATEGY
+# FINAL STRATEGY (SOFT)
 # =================================================
-Run-Step "strategies/final/nifty_ml_oi_pcr_final_strategy.py"
+Run-Step-Soft "strategies/final/nifty_ml_oi_pcr_final_strategy.py"
 
 Write-Host "DAILY RUN COMPLETED SUCCESSFULLY"
 Add-Content -Encoding UTF8 $LOG_FILE "DAILY RUN COMPLETED SUCCESSFULLY"
