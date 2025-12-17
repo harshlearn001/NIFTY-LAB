@@ -19,3 +19,4 @@ __pycache__/
 .DS_Store
 Thumbs.db
 .env
+pipelines/equity/delete_last_equity_entry.py
