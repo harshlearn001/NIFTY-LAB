@@ -2,22 +2,17 @@
 # -*- coding: utf-8 -*-
 
 """
-Build ML Feature Dataset for NIFTY (GPU Ready)
-=============================================
+NIFTY-LAB | ML INFERENCE FEATURE BUILDER (EOD SAFE)
+==================================================
 
-Equity  : data/continuous/master_equity.parquet
-Futures : data/processed/futures_ml/nifty_fut_oi_daily.parquet
-Options : data/processed/options_ml/nifty_pcr_daily.parquet
+✔ Equity, Futures, Options must be SAME EOD date
+✔ Removes intraday equity candles (VOLUME == 0)
+✔ Produces ONE ROW for prediction
+✔ NO target, NO next_close leakage
 
-Output  :
-  data/processed/ml/nifty_ml_features.parquet
-  data/processed/ml/nifty_ml_features.csv
-
-CRITICAL GUARANTEE
-------------------
-✔ ML runs ONLY if EQ_DATE == FUT_DATE == OPT_DATE
-✔ Prevents intraday / partial-session leakage
-✔ Scheduler & holiday safe
+Output:
+  data/processed/ml/nifty_ml_inference.parquet
+  data/processed/ml/nifty_ml_inference.csv
 """
 
 # =================================================
@@ -32,9 +27,8 @@ if str(ROOT) not in sys.path:
 
 # =================================================
 # IMPORTS
-# =================================================ff
+# =================================================
 import pandas as pd
-import numpy as np
 from configs.paths import PROC_DIR, CONT_DIR
 
 # =================================================
@@ -44,25 +38,17 @@ EQ_FILE   = CONT_DIR / "master_equity.parquet"
 FUT_FILE  = PROC_DIR / "futures_ml" / "nifty_fut_oi_daily.parquet"
 PCR_FILE  = PROC_DIR / "options_ml" / "nifty_pcr_daily.parquet"
 
-OUT_DIR   = PROC_DIR / "ml"
+OUT_DIR = PROC_DIR / "ml"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OUT_PQ  = OUT_DIR / "nifty_ml_features.parquet"
-OUT_CSV = OUT_DIR / "nifty_ml_features.csv"
-
-# =================================================
-# FILE CHECKS
-# =================================================
-print("📥 Checking required files...")
-
-for f in [EQ_FILE, FUT_FILE, PCR_FILE]:
-    if not f.exists():
-        raise FileNotFoundError(f"❌ Missing file: {f}")
-    print(f"✅ Found: {f}")
+OUT_PQ  = OUT_DIR / "nifty_ml_inference.parquet"
+OUT_CSV = OUT_DIR / "nifty_ml_inference.csv"
 
 # =================================================
 # LOAD DATA
 # =================================================
+print("📥 Loading data...")
+
 eq  = pd.read_parquet(EQ_FILE)
 fut = pd.read_parquet(FUT_FILE)
 pcr = pd.read_parquet(PCR_FILE)
@@ -81,44 +67,29 @@ eq = eq.rename(columns={
 
 eq["date"] = pd.to_datetime(eq["date"])
 
-# --------------------------------------------------
-# 🚨 REMOVE PARTIAL / INTRADAY EQUITY CANDLES
-# --------------------------------------------------
-# Yahoo returns volume=0 for:
-# - intraday current day
-# - holidays
-# - partial sessions
-# We only allow CONFIRMED EOD candles
+# 🚨 CRITICAL FIX: remove intraday / partial candles
 eq = eq[eq["VOLUME"] > 0].copy()
 
 eq = eq.sort_values("date").reset_index(drop=True)
 
-
 # =================================================
-# DATE ALIGNMENT GUARD (🚨 MOST IMPORTANT)
+# DATE ALIGNMENT GUARD
 # =================================================
 eq_max  = eq["date"].max()
 fut_max = pd.to_datetime(fut["TRADE_DATE"]).max()
 pcr_max = pd.to_datetime(pcr["date"]).max()
 
 print("\n📅 DATA AVAILABILITY CHECK")
-print(f"Equity  max date : {eq_max.date()}")
-print(f"Futures max date : {fut_max.date()}")
-print(f"Options max date : {pcr_max.date()}")
+print(f"Equity  : {eq_max.date()}")
+print(f"Futures : {fut_max.date()}")
+print(f"Options : {pcr_max.date()}")
 
 if not (eq_max == fut_max == pcr_max):
-    print("\n⛔ ML SKIPPED — DATE MISALIGNMENT")
-    if eq_max != fut_max:
-        print(f"  • Equity ({eq_max.date()}) != Futures ({fut_max.date()})")
-    if eq_max != pcr_max:
-        print(f"  • Equity ({eq_max.date()}) != Options ({pcr_max.date()})")
-
-    print("\n➡️ Waiting for complete EOD data for all markets.")
-    print("➡️ No ML features generated today.\n")
+    print("\n⛔ INFERENCE SKIPPED — DATA MISALIGNMENT")
     sys.exit(0)
 
 # =================================================
-# EQUITY FEATURES
+# EQUITY FEATURES (ROLLING SAFE)
 # =================================================
 eq["ret_1d"] = eq["close"].pct_change()
 eq["ret_3d"] = eq["close"].pct_change(3)
@@ -141,10 +112,10 @@ eq_feat = eq[[
     "atr_pct",
     "range_pct",
     "trend_up",
-]].copy()
+]]
 
 # =================================================
-# FUTURES FEATURES (OI ANALYTICS)
+# FUTURES FEATURES
 # =================================================
 fut = fut.rename(columns={
     "TRADE_DATE": "date",
@@ -155,19 +126,13 @@ fut = fut.rename(columns={
 
 fut["date"] = pd.to_datetime(fut["date"])
 
-required_fut = {"date", "price_pct", "oi_pct", "regime"}
-missing_fut = required_fut - set(fut.columns)
-if missing_fut:
-    raise ValueError(f"❌ Missing futures columns: {missing_fut}")
-
 fut_feat = fut[[
     "date",
     "price_pct",
     "oi_pct",
     "regime",
-]].copy()
+]]
 
-# One-hot encode OI regimes
 regime_dum = pd.get_dummies(fut_feat["regime"], prefix="regime")
 fut_feat = pd.concat(
     [fut_feat.drop(columns="regime"), regime_dum],
@@ -182,28 +147,15 @@ pcr_feat = pcr[["date", "pcr"]].sort_values("date")
 pcr_feat["pcr_change"] = pcr_feat["pcr"].pct_change()
 
 # =================================================
-# MERGE ALL FEATURES
+# MERGE FEATURES
 # =================================================
 df = eq_feat.merge(fut_feat, on="date", how="inner")
 df = df.merge(pcr_feat, on="date", how="left")
 
 # =================================================
-# TARGET VARIABLE (NEXT DAY)
+# KEEP ONLY LATEST ROW (INFERENCE)
 # =================================================
-df["next_close"] = df["close"].shift(-1)
-df["next_ret"] = (df["next_close"] - df["close"]) / df["close"]
-df["target"] = (df["next_ret"] > 0).astype(int)
-
-# =================================================
-# FINAL CLEAN
-# =================================================
-df = df.dropna(subset=[
-    "ret_1d",
-    "price_pct",
-    "oi_pct",
-    "pcr"
-]).reset_index(drop=True)
-
+df = df.sort_values("date").tail(1).reset_index(drop=True)
 
 # =================================================
 # SAVE
@@ -214,10 +166,9 @@ df.to_csv(OUT_CSV, index=False)
 # =================================================
 # SUMMARY
 # =================================================
-print("\n✅ ML FEATURE DATASET BUILT SUCCESSFULLY")
-print(f"📦 Parquet : {OUT_PQ}")
-print(f"📦 CSV     : {OUT_CSV}")
-print(f"📊 Rows    : {len(df)}")
-print(f"📊 Columns : {len(df.columns)}")
-print("\nSample:")
-print(df.head(3))
+print("\n✅ ML INFERENCE FEATURES READY")
+print(f"📅 Date : {df.loc[0, 'date'].date()}")
+print(f"📦 Rows : {len(df)}")
+print(f"📦 File : {OUT_PQ}")
+print("\nFeatures:")
+print(df.T)

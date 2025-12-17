@@ -3,7 +3,7 @@
 
 """
 NIFTY-LAB | APPEND DAILY EQUITY TO MASTER
-SAFE • IDEMPOTENT • RERUN FRIENDLY
+AUTO • IDEMPOTENT • FAST • FUTURE-PROOF
 """
 
 from pathlib import Path
@@ -14,62 +14,87 @@ import pandas as pd
 # --------------------------------------------------
 BASE = Path(r"H:\NIFTY-LAB")
 
-DAILY_DIR = BASE / "data" / "processed" / "daily" / "equity"
+DAILY_DIR  = BASE / "data" / "processed" / "daily" / "equity"
 MASTER_PQ = BASE / "data" / "continuous" / "master_equity.parquet"
 MASTER_CSV = BASE / "data" / "continuous" / "master_equity.csv"
 
 # --------------------------------------------------
 # MAIN
 # --------------------------------------------------
-
 def main():
-    print("🚀 NIFTY-LAB | APPEND DAILY EQUITY → MASTER")
+    print("NIFTY-LAB | APPEND DAILY EQUITY TO MASTER")
     print("-" * 60)
 
-    files = sorted(DAILY_DIR.glob("clean_equity_*.parquet"))
+    daily_files = sorted(DAILY_DIR.glob("clean_equity_*.parquet"))
 
-    if not files:
-        print("⚠️ No daily equity files found")
-        return
+    if not daily_files:
+        print("No daily equity files found")
+        return  # soft exit
 
-    print(f"📄 Daily files found: {len(files)}")
-
-    daily_all = []
-    for f in files:
-        df = pd.read_parquet(f)
-        daily_all.append(df)
-
-    daily_df = pd.concat(daily_all, ignore_index=True)
+    print(f"Daily files found : {len(daily_files)}")
 
     # ----------------------------------
-    # Load or create master
+    # Load master if exists
     # ----------------------------------
     if MASTER_PQ.exists():
         master = pd.read_parquet(MASTER_PQ)
-        print(f"✅ Loaded existing master: {len(master):,} rows")
+        print(f"Loaded existing master : {len(master):,} rows")
 
+        last_date = master["DATE"].max().date()
+        print(f"Last master date : {last_date}")
+
+    else:
+        master = None
+        last_date = None
+        print("No master found — creating new one")
+
+    # ----------------------------------
+    # Load only NEW daily files
+    # ----------------------------------
+    new_dfs = []
+
+    for f in daily_files:
+        df = pd.read_parquet(f)
+
+        df_date = df["DATE"].max().date()
+
+        if last_date and df_date <= last_date:
+            continue
+
+        new_dfs.append(df)
+
+    if not new_dfs:
+        print("No new data to append")
+        return  # idempotent exit
+
+    daily_new = pd.concat(new_dfs, ignore_index=True)
+    print(f"New rows loaded : {len(daily_new)}")
+
+    # ----------------------------------
+    # Append & deduplicate
+    # ----------------------------------
+    if master is not None:
         before = len(master)
 
-        master = pd.concat([master, daily_df], ignore_index=True)
+        master = pd.concat([master, daily_new], ignore_index=True)
 
         master = (
             master
-            .drop_duplicates(subset=["DATE"])
+            .drop_duplicates(subset=["DATE", "SYMBOL"])
             .sort_values("DATE")
             .reset_index(drop=True)
         )
 
         added = len(master) - before
-        print(f"➕ New rows added: {added}")
+        print(f"New rows added to master : {added}")
 
     else:
         master = (
-            daily_df
+            daily_new
+            .drop_duplicates(subset=["DATE", "SYMBOL"])
             .sort_values("DATE")
-            .drop_duplicates(subset=["DATE"])
             .reset_index(drop=True)
         )
-        print("✅ Created new master file")
 
     # ----------------------------------
     # Save
@@ -78,12 +103,13 @@ def main():
     master.to_csv(MASTER_CSV, index=False)
 
     print("-" * 60)
-    print("✅ MASTER EQUITY UPDATED")
-    print(f"📊 Rows : {len(master):,}")
-    print(f"📅 From : {master['DATE'].min().date()}")
-    print(f"📅 To   : {master['DATE'].max().date()}")
-    print(f"💾 Parquet : {MASTER_PQ}")
-    print("🎉 DONE ✅")
+    print("MASTER EQUITY UPDATED")
+    print(f"Rows : {len(master):,}")
+    print(f"From : {master['DATE'].min().date()}")
+    print(f"To   : {master['DATE'].max().date()}")
+    print(f"Parquet : {MASTER_PQ}")
+    print(f"CSV     : {MASTER_CSV}")
+    print("DONE")
 
 
 if __name__ == "__main__":

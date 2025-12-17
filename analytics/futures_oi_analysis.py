@@ -2,140 +2,140 @@
 # -*- coding: utf-8 -*-
 
 """
-NIFTY Futures OI + Price Action Analytics
-----------------------------------------
-Builds daily futures regimes:
-- LONG_BUILDUP
-- SHORT_BUILDUP
-- LONG_UNWINDING
-- SHORT_COVERING
+NIFTY-LAB | FUTURES OI ANALYTICS (NIFTY)
 
-Input:
-- data/continuous/master_futures.parquet
+AUTO • HOLIDAY SAFE • SCHEDULER SAFE
 
-Output:
-- data/processed/futures_ml/nifty_fut_oi_daily.parquet
+✔ Uses ALL available FUT_NIFTY files
+✔ Builds multi-day OI analytics
+✔ ML + Strategy ready
 """
 
-# =================================================
-# BOOTSTRAP PROJECT ROOT
-# =================================================
-import sys
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]  # H:\NIFTY-LAB
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-# =================================================
-# IMPORTS
-# =================================================
 import pandas as pd
-from configs.paths import CONT_DIR, PROC_DIR
 
-# =================================================
+# --------------------------------------------------
 # PATHS
-# =================================================
-FUT_MASTER = CONT_DIR / "master_futures.parquet"
+# --------------------------------------------------
+BASE = Path(r"H:\NIFTY-LAB")
 
-OUT_DIR = PROC_DIR / "futures_ml"
+FUT_DAILY_DIR = BASE / "data" / "processed" / "daily" / "futures"
+OUT_DIR = BASE / "data" / "processed" / "futures_ml"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OUT_FILE = OUT_DIR / "nifty_fut_oi_daily.parquet"
+OUT_PQ  = OUT_DIR / "nifty_fut_oi_daily.parquet"
+OUT_CSV = OUT_DIR / "nifty_fut_oi_daily.csv"
 
-# =================================================
-# LOAD DATA
-# =================================================
-print("📥 Loading futures master...")
+# --------------------------------------------------
+# MAIN
+# --------------------------------------------------
+def main():
+    print("NIFTY-LAB | FUTURES OI ANALYTICS")
+    print("-" * 60)
 
-if not FUT_MASTER.exists():
-    raise FileNotFoundError(f"❌ File not found: {FUT_MASTER}")
+    files = sorted(FUT_DAILY_DIR.glob("FUT_NIFTY_*.parquet"))
 
-df = pd.read_parquet(FUT_MASTER)
+    if not files:
+        print("No futures data available. Skipping.")
+        return
 
-# =================================================
-# STANDARDISE COLUMN NAMES
-# =================================================
-df = df.rename(columns={
-    "SYMBOL": "symbol",
-    "TRADE_DATE": "date",
-    "EXP_DATE": "expiry",
-    "OPEN": "open",
-    "HIGH": "high",
-    "LOW": "low",
-    "CLOSE": "close",
-    "OI": "open_interest",
-})
+    frames = []
 
-# =================================================
-# FILTER: NIFTY ONLY
-# =================================================
-df = df[df["symbol"] == "NIFTY"].copy()
+    for f in files:
+        df = pd.read_parquet(f)
+        if df.empty:
+            continue
+        frames.append(df)
 
-df["date"] = pd.to_datetime(df["date"])
-df["expiry"] = pd.to_datetime(df["expiry"])
+    if not frames:
+        print("No valid futures data found after loading.")
+        return
 
-# =================================================
-# PICK CURRENT (NEAREST) EXPIRY PER DAY
-# =================================================
-df = df.sort_values(["date", "expiry"])
-df["rank"] = df.groupby("date")["expiry"].rank(method="first")
-df = df[df["rank"] == 1].drop(columns="rank")
+    # --------------------------------------------------
+    # Combine all days
+    # --------------------------------------------------
+    df = pd.concat(frames, ignore_index=True)
 
-# =================================================
-# SORT BY DATE
-# =================================================
-df = df.sort_values("date")
+    # --------------------------------------------------
+    # Ensure correct dtypes
+    # --------------------------------------------------
+    df["TRADE_DATE"] = pd.to_datetime(df["TRADE_DATE"], errors="coerce")
+    df["EXP_DATE"]   = pd.to_datetime(df["EXP_DATE"], errors="coerce")
+    df["OI"]         = pd.to_numeric(df["OI"], errors="coerce")
+    df["CLOSE"]      = pd.to_numeric(df["CLOSE"], errors="coerce")
 
-# =================================================
-# DAILY % CHANGES
-# =================================================
-df["price_pct"] = df["close"].pct_change() * 100
-df["oi_pct"] = df["open_interest"].pct_change() * 100
+    df = df.dropna(subset=["TRADE_DATE", "EXP_DATE", "OI", "CLOSE"])
 
-# =================================================
-# REGIME CLASSIFICATION
-# =================================================
-def classify(row):
-    if pd.isna(row.price_pct) or pd.isna(row.oi_pct):
-        return "NA"
+    if df.empty:
+        print("No valid futures rows after cleaning.")
+        return
 
-    if row.price_pct > 0 and row.oi_pct > 0:
-        return "LONG_BUILDUP"
-    if row.price_pct < 0 and row.oi_pct > 0:
-        return "SHORT_BUILDUP"
-    if row.price_pct < 0 and row.oi_pct < 0:
-        return "LONG_UNWINDING"
-    if row.price_pct > 0 and row.oi_pct < 0:
-        return "SHORT_COVERING"
+    # --------------------------------------------------
+    # Front-month selection (per day)
+    # --------------------------------------------------
+    front = (
+        df.sort_values("EXP_DATE")
+          .groupby("TRADE_DATE", as_index=False)
+          .first()
+          .sort_values("TRADE_DATE")
+    )
 
-    return "NEUTRAL"
+    # --------------------------------------------------
+    # OI FEATURES
+    # --------------------------------------------------
+    front["oi"] = front["OI"]
+    front["oi_change"] = front["oi"].diff()
+    front["oi_pct"] = front["oi"].pct_change()
 
+    front["price"] = front["CLOSE"]
+    front["price_change"] = front["price"].diff()
+    front["price_pct"] = front["price"].pct_change()
 
-df["regime"] = df.apply(classify, axis=1)
+    # --------------------------------------------------
+    # OI REGIME CLASSIFICATION
+    # --------------------------------------------------
+    def classify(row):
+        if row["price_change"] > 0 and row["oi_change"] > 0:
+            return "LONG_BUILDUP"
+        if row["price_change"] < 0 and row["oi_change"] > 0:
+            return "SHORT_BUILDUP"
+        if row["price_change"] > 0 and row["oi_change"] < 0:
+            return "SHORT_COVERING"
+        if row["price_change"] < 0 and row["oi_change"] < 0:
+            return "LONG_UNWINDING"
+        return "NEUTRAL"
 
-# =================================================
-# FINAL OUTPUT
-# =================================================
-out_cols = [
-    "date",
-    "expiry",
-    "close",
-    "open_interest",
-    "price_pct",
-    "oi_pct",
-    "regime",
-]
+    front["regime"] = front.apply(classify, axis=1)
 
-df_out = df[out_cols].copy()
-# Save Parquet (ML / fast)
-df_out.to_parquet(OUT_FILE, index=False)
+    # --------------------------------------------------
+    # Final output
+    # --------------------------------------------------
+    out = front[[
+        "TRADE_DATE",
+        "price",
+        "price_pct",
+        "oi_pct",
+        "regime",
+    ]].dropna()
 
-# Save CSV (human readable)
-OUT_FILE_CSV = OUT_FILE.with_suffix(".csv")
-df_out.to_csv(OUT_FILE_CSV, index=False)
+    if out.empty:
+        print("No analytics rows produced.")
+        return
 
-print("✅ Futures OI analytics built successfully")
-print(f"📦 Parquet saved to: {OUT_FILE}")
-print(f"📄 CSV saved to: {OUT_FILE_CSV}")
-print(f"📊 Rows: {len(df_out)}")
+    # --------------------------------------------------
+    # Save
+    # --------------------------------------------------
+    out.to_parquet(OUT_PQ, index=False)
+    out.to_csv(OUT_CSV, index=False)
+
+    print("Futures OI analytics built successfully")
+    print(f"Rows : {len(out)}")
+    print(f"From : {out['TRADE_DATE'].min().date()}")
+    print(f"To   : {out['TRADE_DATE'].max().date()}")
+    print(f"Saved: {OUT_PQ}")
+
+# --------------------------------------------------
+# ENTRY
+# --------------------------------------------------
+if __name__ == "__main__":
+    main()

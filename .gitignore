@@ -1,36 +1,21 @@
-# =====================
-# DATA (DO NOT PUSH)
-# =====================
-# Ignore all data outputs
+# ----------------------
+# DATA (NEVER COMMIT)
+# ----------------------
 data/
+logs/
+models/*.joblib
 
-# Allow README files inside data folders (documentation only)
-!data/**/README.md
-
-# Extra safety: never push data formats
-*.parquet
-*.csv
-*.zip
-
-# =====================
-# Python
-# =====================
+# ----------------------
+# CACHE / TEMP
+# ----------------------
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
+*.parquet
+*.csv
 
-# =====================
-# Environments
-# =====================
-.env
-.env.*
-.ipynb_checkpoints/
-
-# =====================
-# OS / Editor junk
-# =====================
+# ----------------------
+# OS / ENV
+# ----------------------
 .DS_Store
 Thumbs.db
-.vscode/
-.idea/
+.env

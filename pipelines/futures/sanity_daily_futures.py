@@ -19,7 +19,7 @@ EQ_DAILY_DIR = BASE / "data" / "processed" / "daily" / "equity"
 # HELPERS
 # --------------------------------------------------
 def find_col(df, names):
-    """Return first matching column name (case-insensitive)"""
+    """Return first matching column name (case-insensitive)."""
     cols = {c.lower(): c for c in df.columns}
     for n in names:
         if n.lower() in cols:
@@ -30,18 +30,18 @@ def find_col(df, names):
 # MAIN
 # --------------------------------------------------
 def main():
-    print("🚀 NIFTY-LAB | DAILY EQUITY SANITY CHECK")
+    print("NIFTY-LAB | DAILY EQUITY SANITY CHECK")
     print("=" * 80)
 
     files = sorted(EQ_DAILY_DIR.glob("clean_equity_*.parquet"))
     if not files:
-        print("⚠️ No cleaned daily equity files found")
+        print("No cleaned daily equity files found")
         return
 
-    print(f"📄 Files found : {len(files)}")
+    print(f"Files found : {len(files)}")
 
     f = files[-1]
-    print("\n📌 SAMPLE FILE")
+    print("\nSample file")
     print(f"File : {f.name}")
 
     df = pd.read_parquet(f)
@@ -64,41 +64,41 @@ def main():
     # --------------------------------------------------
     # DATE CHECKS
     # --------------------------------------------------
-    print("\n📅 DATE CHECKS")
+    print("\nDATE CHECKS")
     print(f"Unique dates : {df[DATE_COL].nunique()}")
     print(
-        f"Date range  : {df[DATE_COL].min()} → {df[DATE_COL].max()}"
+        f"Date range  : {df[DATE_COL].min()} -> {df[DATE_COL].max()}"
     )
 
     # --------------------------------------------------
     # SCHEMA CHECK
     # --------------------------------------------------
-    print("\n📐 SCHEMA CHECK")
-    print("✅ Required columns resolved dynamically")
+    print("\nSCHEMA CHECK")
+    print("Required columns resolved dynamically")
 
     # --------------------------------------------------
     # DATA TYPES
     # --------------------------------------------------
-    print("\n📐 DATA TYPES")
+    print("\nDATA TYPES")
     print(df.dtypes)
 
     # --------------------------------------------------
     # MISSING VALUES
     # --------------------------------------------------
-    print("\n📉 MISSING VALUES (non-zero only)")
+    print("\nMISSING VALUES (non-zero only)")
     na = df[[DATE_COL, OPEN, HIGH, LOW, CLOSE, SYMBOL]].isna().sum()
     na = na[na > 0]
-    print(na if not na.empty else "✅ No missing values")
+    print(na if not na.empty else "No missing values")
 
     # --------------------------------------------------
     # DUPLICATES
     # --------------------------------------------------
-    print(f"\n🔁 DUPLICATE ROWS : {df.duplicated().sum()}")
+    print(f"\nDUPLICATE ROWS : {df.duplicated().sum()}")
 
     # --------------------------------------------------
     # OHLC LOGIC
     # --------------------------------------------------
-    print("\n📊 OHLC LOGIC CHECK")
+    print("\nOHLC LOGIC CHECK")
     bad_ohlc = df[
         (df[HIGH] < df[LOW]) |
         (df[CLOSE] > df[HIGH]) |
@@ -108,15 +108,15 @@ def main():
     ]
 
     if len(bad_ohlc) > 0:
-        print(f"❌ OHLC errors : {len(bad_ohlc)}")
+        print(f"OHLC errors : {len(bad_ohlc)}")
         print(bad_ohlc.head())
     else:
-        print("✅ OHLC logic valid")
+        print("OHLC logic valid")
 
     # --------------------------------------------------
     # PRICE SANITY
     # --------------------------------------------------
-    print("\n💰 PRICE SANITY")
+    print("\nPRICE SANITY")
     bad_price = df[
         (df[OPEN] <= 0) |
         (df[HIGH] <= 0) |
@@ -125,20 +125,20 @@ def main():
     ]
 
     if len(bad_price) > 0:
-        print(f"❌ Bad prices : {len(bad_price)}")
+        print(f"Bad prices : {len(bad_price)}")
     else:
-        print("✅ Prices valid")
+        print("Prices valid")
 
     # --------------------------------------------------
     # VOLUME SANITY
     # --------------------------------------------------
     neg_vol = df[df[VOLUME] < 0]
     if len(neg_vol) > 0:
-        print(f"❌ Negative volume rows : {len(neg_vol)}")
+        print(f"Negative volume rows : {len(neg_vol)}")
     else:
-        print("✅ Volume sanity OK")
+        print("Volume sanity OK")
 
-    print("\n🎉 DAILY EQUITY SANITY CHECK PASSED ✅")
+    print("\nDAILY EQUITY SANITY CHECK PASSED")
 
 
 if __name__ == "__main__":

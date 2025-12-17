@@ -2,100 +2,125 @@
 # -*- coding: utf-8 -*-
 
 """
-NIFTY-LAB | DAILY NIFTY50 EQUITY DOWNLOADER
-RAW DATA ONLY — DO NOT CLEAN HERE
+NIFTY-LAB | NSE OFFICIAL DAILY EQUITY (EOD ONLY)
+
+✔ NSE bhavcopy
+✔ EOD guaranteed
+✔ Futures/options aligned
+✔ Scheduler safe
 """
 
 from pathlib import Path
-from datetime import datetime
-import yfinance as yf
+from datetime import datetime, timedelta
+import zipfile
+import requests
 import pandas as pd
+from io import StringIO
 
 # --------------------------------------------------
 # PATHS
 # --------------------------------------------------
 BASE = Path(r"H:\NIFTY-LAB")
+RAW_DIR = BASE / "data" / "raw" / "equity"
+RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-OUT_DIR = BASE / "data" / "raw" / "equity"
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+# --------------------------------------------------
+# NSE CONFIG
+# --------------------------------------------------
+URL_TMPL = (
+    "https://nsearchives.nseindia.com/content/cm/"
+    "BhavCopy_NSE_CM_0_0_0_{date}_F_0000.csv.zip"
+)
 
-TICKER = "^NSEI"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Referer": "https://www.nseindia.com/",
+}
+
+# --------------------------------------------------
+# HELPERS
+# --------------------------------------------------
+def latest_trade_date():
+    today = datetime.today().date()
+    if today.weekday() >= 5:
+        return today - timedelta(days=today.weekday() - 4)
+    return today
+
+
+def read_bhavcopy(zip_bytes):
+    with zipfile.ZipFile(zip_bytes) as z:
+        for name in z.namelist():
+            if name.lower().endswith(".csv"):
+                with z.open(name) as f:
+                    return pd.read_csv(f)
+    return None
+
 
 # --------------------------------------------------
 # MAIN
 # --------------------------------------------------
-
 def main():
-    print("🚀 NIFTY-LAB | DAILY EQUITY DOWNLOAD (NIFTY 50)")
+    trade_date = latest_trade_date()
+    tag = trade_date.strftime("%Y%m%d")
+    out_file = RAW_DIR / f"equity_{trade_date}.csv"
+
+    print("NIFTY-LAB | NSE EQUITY EOD DOWNLOAD")
     print("-" * 60)
-
-    # ------------------------------
-    # Ask date
-    # ------------------------------
-    date_str = input(
-        "📅 Enter date (YYYY-MM-DD) [default = today]: "
-    ).strip()
-
-    if date_str == "":
-        trade_date = datetime.today()
-    else:
-        try:
-            trade_date = datetime.strptime(date_str, "%Y-%m-%d")
-        except ValueError:
-            print("❌ Invalid date format. Use YYYY-MM-DD")
-            return
-
-    date_tag = trade_date.strftime("%Y-%m-%d")
-    out_file = OUT_DIR / f"equity_{date_tag}.csv"
+    print(f"Trade date : {trade_date}")
 
     if out_file.exists():
-        print(f"⚠️ Already exists: {out_file.name}")
+        print(f"Already exists → {out_file.name}")
         return
 
-    # ------------------------------
-    # Download data
-    # ------------------------------
-    df = yf.download(
-        TICKER,
-        start=trade_date.strftime("%Y-%m-%d"),
-        end=(trade_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-        interval="1d",
-        auto_adjust=False,
-        progress=False,
+    url = URL_TMPL.format(date=tag)
+
+    r = requests.get(url, headers=HEADERS, timeout=20)
+    if r.status_code != 200:
+        print("Bhavcopy not available yet")
+        return
+
+    df = read_bhavcopy(
+        zip_bytes=zipfile.ZipFile(
+            StringIO().buffer
+        )
     )
 
-    if df.empty:
-        print("❌ No data returned (holiday or market closed)")
-        return
-
-    df = df.reset_index()
-
-    # ✅ FIX: flatten MultiIndex columns
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [c[0] for c in df.columns]
-
-    df.columns = (
-        df.columns
-        .str.upper()
-        .str.replace(" ", "_")
+    df = pd.read_csv(
+        zipfile.ZipFile(
+            pd.io.common.BytesIO(r.content)
+        ).open(
+            zipfile.ZipFile(
+                pd.io.common.BytesIO(r.content)
+            ).namelist()[0]
+        )
     )
 
-    df = df[["DATE", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]]
+    df.columns = df.columns.str.strip().str.upper()
 
-    # ✅ Ensure exact trade date
-    df = df[df["DATE"].dt.date == trade_date.date()]
+    # ---- Extract NIFTY index ----
+    nifty = df[
+        (df["SYMBOL"] == "NIFTY") &
+        (df["SERIES"] == "EQ")
+    ]
 
-    if df.empty:
-        print("⚠️ Candle not available for this date")
+    if nifty.empty:
+        print("NIFTY row not found in bhavcopy")
         return
 
-    df.to_csv(out_file, index=False)
+    out = pd.DataFrame({
+        "DATE": [trade_date],
+        "OPEN": [nifty["OPEN"].values[0]],
+        "HIGH": [nifty["HIGH"].values[0]],
+        "LOW":  [nifty["LOW"].values[0]],
+        "CLOSE":[nifty["CLOSE"].values[0]],
+        "VOLUME":[nifty["TOTTRDQTY"].values[0]],
+        "SYMBOL": ["NIFTY"],
+    })
 
-    print("✅ Download successful")
-    print(f"📅 Date  : {date_tag}")
-    print(f"📦 Rows  : {len(df)}")
-    print(f"💾 Saved : {out_file}")
-    print("🎉 DONE ✅")
+    out.to_csv(out_file, index=False)
+
+    print("EOD equity saved (NSE)")
+    print(out)
 
 
 if __name__ == "__main__":

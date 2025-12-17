@@ -3,12 +3,21 @@
 
 """
 NIFTY-LAB | DAILY OPTIONS DOWNLOAD (FO ZIP)
+AUTO MODE — SAFE FOR SCHEDULER
+
+Downloads:
+  foDDMMYYYY.zip from NSE
+
+Saves:
+  data/raw/options/fo_YYYY-MM-DD.zip
+
 RAW DATA ONLY — DO NOT CLEAN HERE
 """
 
-from pathlib import Path
-from datetime import datetime
+import argparse
 import requests
+from datetime import datetime
+from pathlib import Path
 
 # --------------------------------------------------
 # PATHS
@@ -36,43 +45,64 @@ HEADERS = {
 # --------------------------------------------------
 # MAIN
 # --------------------------------------------------
-def main():
-    print("🚀 NIFTY-LAB | DAILY OPTIONS DOWNLOAD (FO ZIP)")
+def main(trade_date):
+    print("NIFTY-LAB | DAILY OPTIONS DOWNLOAD (AUTO)")
     print("-" * 60)
+    print(f"Trade Date : {trade_date}")
 
-    inp = input("📅 Enter date (YYYY-MM-DD) [default=today]: ").strip()
-
-    if not inp:
-        trade_date = datetime.today()
-    else:
-        trade_date = datetime.strptime(inp, "%Y-%m-%d")
+    # ------------------------------
+    # Weekend guard
+    # ------------------------------
+    if trade_date.weekday() >= 5:
+        print("Weekend detected — NSE FO closed")
+        return
 
     tag = trade_date.strftime("%d%m%Y")
-    out = OUT_DIR / f"fo_{trade_date.date()}.zip"
     url = BASE_URL.format(date=tag)
 
-    print(f"🌐 URL  : {url}")
+    out = OUT_DIR / f"fo_{trade_date:%Y-%m-%d}.zip"
 
     if out.exists():
-        print(f"⏩ Already downloaded: {out.name}")
+        print(f"Already downloaded : {out.name}")
         return
+
+    print(f"URL : {url}")
 
     try:
         r = requests.get(url, headers=HEADERS, timeout=20)
 
         if r.status_code == 200 and len(r.content) > 50_000:
             out.write_bytes(r.content)
-            print("✅ Download successful")
-            print(f"📅 Date  : {trade_date.date()}")
-            print(f"💾 Saved : {out}")
+            print("Download successful")
+            print(f"Saved : {out}")
         else:
-            print("❌ Bhavcopy not available (Holiday / Not released yet)")
+            print("FO bhavcopy not available (holiday / not released yet)")
 
-    except Exception as e:
-        print(f"⚠️ Download failed: {e}")
+    except requests.RequestException as e:
+        print(f"Network error : {e}")
 
-    print("🎉 DONE ✅")
+    print("DONE")
 
 
+# --------------------------------------------------
+# CLI
+# --------------------------------------------------
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Download daily NSE FO options bhavcopy"
+    )
+    parser.add_argument(
+        "--date",
+        help="Trade date YYYY-MM-DD (default: today)",
+        required=False,
+    )
+
+    args = parser.parse_args()
+
+    trade_date = (
+        datetime.strptime(args.date, "%Y-%m-%d").date()
+        if args.date
+        else datetime.today().date()
+    )
+
+    main(trade_date)

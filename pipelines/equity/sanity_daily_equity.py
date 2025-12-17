@@ -30,19 +30,19 @@ REQUIRED_COLS = {
 # MAIN
 # --------------------------------------------------
 def main():
-    print("🚀 NIFTY-LAB | DAILY EQUITY SANITY CHECK")
+    print("NIFTY-LAB | DAILY EQUITY SANITY CHECK")
     print("=" * 80)
 
     files = sorted(EQ_DAILY_DIR.glob("clean_equity_*.parquet"))
 
     if not files:
-        print("⚠️ No cleaned daily equity files found")
-        return
+        print("No cleaned daily equity files found")
+        return  # soft exit
 
-    print(f"📄 Files found : {len(files)}")
+    print(f"Files found : {len(files)}")
 
     f = files[-1]
-    print("\n📌 SAMPLE FILE")
+    print("\nSample file")
     print(f"File : {f.name}")
 
     df = pd.read_parquet(f)
@@ -54,46 +54,46 @@ def main():
     # --------------------------------------------------
     # DATE CHECKS
     # --------------------------------------------------
-    print("\n📅 DATE CHECKS")
+    print("\nDATE CHECKS")
     print(f"Unique dates : {df['DATE'].nunique()}")
     print(
-        f"Date range  : {df['DATE'].min().date()} → {df['DATE'].max().date()}"
+        f"Date range  : {df['DATE'].min().date()} -> {df['DATE'].max().date()}"
     )
 
     # --------------------------------------------------
     # SCHEMA CHECK
     # --------------------------------------------------
-    print("\n📐 SCHEMA CHECK")
+    print("\nSCHEMA CHECK")
     missing = REQUIRED_COLS - set(df.columns)
     if missing:
-        print(f"❌ Missing columns : {missing}")
+        print(f"Missing columns : {missing}")
         return
     else:
-        print("✅ Required columns OK")
+        print("Required columns OK")
 
     # --------------------------------------------------
     # DATA TYPES
     # --------------------------------------------------
-    print("\n📐 DATA TYPES")
+    print("\nDATA TYPES")
     print(df.dtypes)
 
     # --------------------------------------------------
     # MISSING VALUES
     # --------------------------------------------------
-    print("\n📉 MISSING VALUES (non-zero only)")
+    print("\nMISSING VALUES (non-zero only)")
     na = df.isna().sum()
     na = na[na > 0]
-    print(na if not na.empty else "✅ No missing values")
+    print(na if not na.empty else "No missing values")
 
     # --------------------------------------------------
     # DUPLICATES
     # --------------------------------------------------
-    print(f"\n🔁 DUPLICATE ROWS : {df.duplicated().sum()}")
+    print(f"\nDUPLICATE ROWS : {df.duplicated().sum()}")
 
     # --------------------------------------------------
     # OHLC LOGIC CHECK
     # --------------------------------------------------
-    print("\n📊 OHLC LOGIC CHECK")
+    print("\nOHLC LOGIC CHECK")
     bad_ohlc = df[
         (df["HIGH"] < df["LOW"]) |
         (df["CLOSE"] > df["HIGH"]) |
@@ -103,15 +103,15 @@ def main():
     ]
 
     if len(bad_ohlc) > 0:
-        print(f"❌ OHLC logic errors : {len(bad_ohlc)}")
+        print(f"OHLC logic errors : {len(bad_ohlc)}")
         print(bad_ohlc.head())
     else:
-        print("✅ OHLC logic valid")
+        print("OHLC logic valid")
 
     # --------------------------------------------------
     # PRICE SANITY
     # --------------------------------------------------
-    print("\n💰 PRICE SANITY CHECK")
+    print("\nPRICE SANITY CHECK")
     bad_price = df[
         (df["OPEN"] <= 0) |
         (df["HIGH"] <= 0) |
@@ -120,20 +120,20 @@ def main():
     ]
 
     if len(bad_price) > 0:
-        print(f"❌ Zero / negative prices : {len(bad_price)}")
+        print(f"Zero / negative prices : {len(bad_price)}")
     else:
-        print("✅ Prices are positive")
+        print("Prices are positive")
 
     # --------------------------------------------------
     # VOLUME CHECK (index allows zero)
     # --------------------------------------------------
     neg_vol = df[df["VOLUME"] < 0]
     if len(neg_vol) > 0:
-        print(f"❌ Negative volume rows : {len(neg_vol)}")
+        print(f"Negative volume rows : {len(neg_vol)}")
     else:
-        print("✅ Volume sanity OK")
+        print("Volume sanity OK")
 
-    print("\n🎉 DAILY EQUITY SANITY CHECK PASSED ✅")
+    print("\nDAILY EQUITY SANITY CHECK PASSED")
 
 
 if __name__ == "__main__":
