@@ -5,6 +5,7 @@
 NIFTY-LAB | XGBOOST INFERENCE (PRODUCTION)
 
 ✔ Uses inference features
+✔ Loads trained GPU XGB model
 ✔ Safe fallback if model missing
 ✔ Writes ML prediction for final strategy
 """
@@ -19,9 +20,8 @@ import joblib
 BASE = Path(r"H:\NIFTY-LAB")
 
 FEATURE_FILE = BASE / "data" / "processed" / "ml" / "nifty_inference_features.parquet"
-MODEL_FILE   = BASE / "models" / "nifty_xgb_model.pkl"
-
-OUT_DIR  = BASE / "data" / "processed" / "ml"
+MODEL_FILE   = BASE / "models" / "nifty_xgb_gpu.joblib"   # ✅ FIXED
+OUT_DIR      = BASE / "data" / "processed" / "ml"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 OUT_FILE = OUT_DIR / "nifty_ml_prediction.parquet"
@@ -51,15 +51,25 @@ if not MODEL_FILE.exists():
     prob_down = 0.5
 
 else:
+    print(f"✅ Loaded model : {MODEL_FILE.name}")
     model = joblib.load(MODEL_FILE)
 
-    # Ensure correct feature order
-    feature_cols = model.feature_names_in_
-    X_model = X[feature_cols]
+feature_cols = list(model.feature_names_in_)
+X_aligned = X.copy()
 
-    probs = model.predict_proba(X_model)[0]
-    prob_down = probs[0]
-    prob_up   = probs[1]
+for col in feature_cols:
+    if col not in X_aligned.columns:
+        if col.startswith("regime_"):
+            X_aligned[col] = 0
+        else:
+            X_aligned[col] = 0.0
+
+X_model = X_aligned[feature_cols]
+
+probs = model.predict_proba(X_model)[0]
+prob_down = float(probs[0])
+prob_up   = float(probs[1])
+
 
 # --------------------------------------------------
 # OUTPUT

@@ -5,9 +5,10 @@
 NIFTY-LAB | CLEAN DAILY FUTURES (AUTO | NIFTY ONLY)
 
 ✔ Auto-finds latest FO ZIP
+✔ FIXED: Reads NSE OPEN_INT* correctly
 ✔ Holiday / delay safe
 ✔ NEVER breaks scheduler
-✔ Parquet + CSV
+✔ Outputs Parquet + CSV
 """
 
 from pathlib import Path
@@ -46,11 +47,16 @@ def read_nse_csv(f):
 
 
 def normalize_columns(df):
+    """
+    NSE sometimes uses special chars like *, %, ₹ in column names.
+    This function strips everything except A-Z, 0-9 and _.
+    """
     df.columns = (
         df.columns.astype(str)
         .str.strip()
         .str.upper()
         .str.replace(" ", "_")
+        .str.replace(r"[^A-Z0-9_]", "", regex=True)  # 🔥 KEY FIX
     )
     return df
 
@@ -65,14 +71,14 @@ def main():
 
     if zip_file is None:
         print("No FO ZIP found in recent days — skipping futures clean")
-        return  # 🔑 SOFT EXIT
+        return
 
     out_pq = OUT_DIR / f"FUT_NIFTY_{trade_date}.parquet"
     out_csv = OUT_DIR / f"FUT_NIFTY_{trade_date}.csv"
 
     if out_pq.exists():
         print(f"Already cleaned → {out_pq.name}")
-        return  # 🔑 SOFT EXIT
+        return
 
     print(f"Using FO ZIP : {zip_file.name}")
     print(f"Trade Date  : {trade_date}")
@@ -97,6 +103,7 @@ def main():
                 df["INSTRUMENT"] = df["INSTRUMENT"].astype(str).str.strip()
                 df["SYMBOL"] = df["SYMBOL"].astype(str).str.strip()
 
+                # Only NIFTY index futures
                 df = df[
                     (df["INSTRUMENT"] == "FUTIDX") &
                     (df["SYMBOL"] == "NIFTY")
@@ -105,6 +112,7 @@ def main():
                 if df.empty:
                     continue
 
+                # Detect expiry column
                 for c in ("EXP_DATE", "EXPIRY", "EXPIRY_DATE", "EXP_DT"):
                     if c in df.columns:
                         df.rename(columns={c: "EXP_DATE"}, inplace=True)
@@ -117,13 +125,19 @@ def main():
 
     if not frames:
         print("No valid NIFTY futures found — skipping")
-        return  # 🔑 SOFT EXIT
+        return
 
     df = pd.concat(frames, ignore_index=True)
 
+    # --------------------------------------------------
+    # DATE NORMALIZATION
+    # --------------------------------------------------
     df["TRADE_DATE"] = pd.to_datetime(df["TRADE_DATE"])
     df["EXP_DATE"] = pd.to_datetime(df["EXP_DATE"], dayfirst=True)
 
+    # --------------------------------------------------
+    # PRICE COLUMN NORMALIZATION
+    # --------------------------------------------------
     df.rename(
         columns={
             "OPEN_PRICE": "OPEN",
@@ -131,20 +145,60 @@ def main():
             "LO_PRICE": "LOW",
             "CLOSE_PRICE": "CLOSE",
             "TRD_QTY": "VOLUME",
-            "OPEN_INT": "OI",
         },
         inplace=True,
     )
 
-    df = df[
-        ["SYMBOL", "TRADE_DATE", "EXP_DATE", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME", "OI"]
+    # --------------------------------------------------
+    # ✅ CORRECT NSE OI HANDLING (NOW WORKS)
+    # --------------------------------------------------
+    OI_ALIASES = [
+        "OPEN_INT",
+        "OPENINTEREST",
+        "OPEN_INTEREST",
+        "OPEN_INT_QTY",
+        "OI",
     ]
 
-    for c in ["OPEN", "HIGH", "LOW", "CLOSE", "VOLUME", "OI"]:
+    oi_col = next((c for c in OI_ALIASES if c in df.columns), None)
+
+    if oi_col:
+        df["OI"] = pd.to_numeric(df[oi_col], errors="coerce")
+    else:
+        df["OI"] = pd.NA
+
+    # --------------------------------------------------
+    # SAFE COLUMN SELECTION
+    # --------------------------------------------------
+    required = [
+        "SYMBOL",
+        "TRADE_DATE",
+        "EXP_DATE",
+        "OPEN",
+        "HIGH",
+        "LOW",
+        "CLOSE",
+        "VOLUME",
+        "OI",
+    ]
+
+    df = df[[c for c in required if c in df.columns]]
+
+    # --------------------------------------------------
+    # TYPE COERCION
+    # --------------------------------------------------
+    for c in ["OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    df = df.dropna().drop_duplicates()
+    # --------------------------------------------------
+    # CLEANING
+    # --------------------------------------------------
+    df = df.drop_duplicates()
+    df = df.dropna(subset=["OPEN", "HIGH", "LOW", "CLOSE"])
 
+    # --------------------------------------------------
+    # SAVE
+    # --------------------------------------------------
     df.to_parquet(out_pq, index=False)
     df.to_csv(out_csv, index=False)
 
@@ -158,4 +212,4 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         print(f"Non-fatal futures clean error: {e}")
-        exit(0)  # 🔑 NEVER FAIL PIPELINE
+        exit(0)

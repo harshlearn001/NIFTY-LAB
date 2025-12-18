@@ -20,3 +20,4 @@ __pycache__/
 Thumbs.db
 .env
 pipelines/equity/delete_last_equity_entry.py
+pipelines/futures/*_once.py

@@ -63,7 +63,8 @@ def main():
 
     df = df[["DATE", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME", "SYMBOL"]]
 
-    df["DATE"] = pd.to_datetime(df["DATE"], dayfirst=True)
+    df["DATE"] = pd.to_datetime(df["DATE"], format="%Y-%m-%d")
+
     df["SYMBOL"] = "NIFTY"
 
     for c in ["OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]:
