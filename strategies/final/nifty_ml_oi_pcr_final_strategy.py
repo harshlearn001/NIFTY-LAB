@@ -99,7 +99,8 @@ pcr_val   = float(row["pcr"]) if pd.notna(row["pcr"]) else 1.0
 # --------------------------------------------------
 signal = "NO_TRADE"
 reason = []
-
+# --------------------------------------------------
+#
 # LONG
 if (
     prob_up >= 0.55 and
@@ -117,6 +118,23 @@ elif (
 ):
     signal = "SHORT"
     reason = ["ML_DOWN", regime, f"PCR={pcr_val:.2f}"]
+# --------------------------------------------------
+# POSITION SIZING (PROBABILITY BASED)
+# --------------------------------------------------
+position_size = 0.0
+
+if signal == "LONG":
+    if prob_up >= 0.75:
+        position_size = 1.0   # full size
+    elif prob_up >= 0.65:
+        position_size = 0.5   # half size
+
+elif signal == "SHORT":
+    if prob_down >= 0.75:
+        position_size = 1.0
+    elif prob_down >= 0.65:
+        position_size = 0.5
+
 
 # --------------------------------------------------
 # OUTPUT (DATED)
@@ -124,12 +142,14 @@ elif (
 out = pd.DataFrame({
     "date": [row["date"]],
     "signal": [signal],
+    "position_size": [position_size],
     "prob_up": [prob_up],
     "prob_down": [prob_down],
     "oi_regime": [regime],
     "pcr": [pcr_val],
     "reason": [" | ".join(reason)],
 })
+
 
 date_tag = row["date"].strftime("%d-%m-%Y")
 OUT_FILE = OUT_DIR / f"nifty_final_signal_{date_tag}.csv"
