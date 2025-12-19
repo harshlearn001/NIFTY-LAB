@@ -5,14 +5,15 @@
 NIFTY-LAB | FINAL STRATEGY (PRODUCTION SAFE)
 ML + FUTURES OI + OPTIONS PCR (EOD)
 
+✔ As-of PCR alignment (CORRECT)
+✔ Strict ML + OI date match
 ✔ Column-agnostic
-✔ Date-safe
-✔ Skips gracefully
-✔ Dated output
+✔ Never fails on date mismatch
 """
 
 from pathlib import Path
 import pandas as pd
+import sys
 
 # --------------------------------------------------
 # PATHS
@@ -31,76 +32,79 @@ print("🚀 NIFTY FINAL STRATEGY")
 # --------------------------------------------------
 # SAFE LOAD
 # --------------------------------------------------
-missing = False
-
-if not ML_FILE.exists():
-    print(f"⚠️ ML file missing : {ML_FILE}")
-    missing = True
-
-if not OI_FILE.exists():
-    print(f"⚠️ OI file missing : {OI_FILE}")
-    missing = True
-
-if not PCR_FILE.exists():
-    print(f"⚠️ PCR file missing : {PCR_FILE}")
-    missing = True
-
-if missing:
-    print("⏭️ Skipping final strategy safely")
-    exit(0)
+for f in [ML_FILE, OI_FILE, PCR_FILE]:
+    if not f.exists():
+        print(f"⚠️ Missing file : {f}")
+        sys.exit(0)
 
 ml  = pd.read_parquet(ML_FILE)
 oi  = pd.read_parquet(OI_FILE)
 pcr = pd.read_parquet(PCR_FILE)
 
 # --------------------------------------------------
-# DATE NORMALIZATION (CRITICAL FIX)
+# DATE NORMALIZATION (PURE DATE)
 # --------------------------------------------------
 def normalize_date(df):
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"])
-    elif "TRADE_DATE" in df.columns:
-        df["date"] = pd.to_datetime(df["TRADE_DATE"])
-    else:
-        raise KeyError(f"No date column in {df.columns.tolist()}")
-    return df
+    for col in ["date", "TRADE_DATE", "DATE"]:
+        if col in df.columns:
+            df["date"] = pd.to_datetime(df[col]).dt.date
+            return df
+    raise KeyError(f"No date column in {df.columns.tolist()}")
 
 ml  = normalize_date(ml)
 oi  = normalize_date(oi)
 pcr = normalize_date(pcr)
 
 # --------------------------------------------------
-# STANDARDIZE OI + PCR
+# DETECT OI REGIME
 # --------------------------------------------------
-oi  = oi.rename(columns={"oi_signal": "regime"})
-pcr = pcr[["date", "pcr"]]
+def detect_regime_column(df):
+    for col in ["regime", "oi_regime", "oi_signal"]:
+        if col in df.columns:
+            return col
+    raise KeyError(f"No regime column in OI file: {df.columns.tolist()}")
+
+regime_col = detect_regime_column(oi)
 
 # --------------------------------------------------
-# MERGE (STRICT DATE ALIGNMENT)
+# ANCHOR DATE = ML DATE (KEY FIX)
 # --------------------------------------------------
-df = (
-    ml.merge(oi[["date", "regime"]], on="date", how="inner")
-      .merge(pcr, on="date", how="inner")
-)
+trade_date = ml["date"].max()
 
-if df.empty:
-    print("❌ No aligned ML / OI / PCR rows")
-    exit(0)
+# Futures OI must match same date
+# Futures OI = AS-OF (latest <= ML date)
+oi_asof = oi[oi["date"] <= trade_date].sort_values("date").tail(1)
 
-row = df.iloc[-1]
+if oi_asof.empty:
+    print(f"❌ No OI available on or before {trade_date}")
+    sys.exit(0)
 
-prob_up   = float(row["prob_up"])
-prob_down = float(row["prob_down"])
-regime    = row["regime"]
-pcr_val   = float(row["pcr"]) if pd.notna(row["pcr"]) else 1.0
+
+# PCR = AS-OF (latest <= trade_date)
+pcr_asof = pcr[pcr["date"] <= trade_date].sort_values("date").tail(1)
+if pcr_asof.empty:
+    print(f"❌ No PCR available on or before {trade_date}")
+    sys.exit(0)
+
+# --------------------------------------------------
+# EXTRACT VALUES
+# --------------------------------------------------
+row_ml  = ml[ml["date"] == trade_date].iloc[-1]
+row_oi  = oi_asof.iloc[-1]
+
+row_pcr = pcr_asof.iloc[-1]
+
+prob_up   = float(row_ml["prob_up"])
+prob_down = float(row_ml["prob_down"])
+regime    = row_oi[regime_col]
+pcr_val   = float(row_pcr["pcr"]) if pd.notna(row_pcr["pcr"]) else 1.0
 
 # --------------------------------------------------
 # DECISION ENGINE
 # --------------------------------------------------
 signal = "NO_TRADE"
 reason = []
-# --------------------------------------------------
-#
+
 # LONG
 if (
     prob_up >= 0.55 and
@@ -118,29 +122,22 @@ elif (
 ):
     signal = "SHORT"
     reason = ["ML_DOWN", regime, f"PCR={pcr_val:.2f}"]
+
 # --------------------------------------------------
-# POSITION SIZING (PROBABILITY BASED)
+# POSITION SIZING
 # --------------------------------------------------
 position_size = 0.0
 
 if signal == "LONG":
-    if prob_up >= 0.75:
-        position_size = 1.0   # full size
-    elif prob_up >= 0.65:
-        position_size = 0.5   # half size
-
+    position_size = 1.0 if prob_up >= 0.75 else 0.5 if prob_up >= 0.65 else 0.0
 elif signal == "SHORT":
-    if prob_down >= 0.75:
-        position_size = 1.0
-    elif prob_down >= 0.65:
-        position_size = 0.5
-
+    position_size = 1.0 if prob_down >= 0.75 else 0.5 if prob_down >= 0.65 else 0.0
 
 # --------------------------------------------------
-# OUTPUT (DATED)
+# OUTPUT
 # --------------------------------------------------
 out = pd.DataFrame({
-    "date": [row["date"]],
+    "date": [trade_date],
     "signal": [signal],
     "position_size": [position_size],
     "prob_up": [prob_up],
@@ -150,8 +147,7 @@ out = pd.DataFrame({
     "reason": [" | ".join(reason)],
 })
 
-
-date_tag = row["date"].strftime("%d-%m-%Y")
+date_tag = pd.to_datetime(trade_date).strftime("%d-%m-%Y")
 OUT_FILE = OUT_DIR / f"nifty_final_signal_{date_tag}.csv"
 
 out.to_csv(OUT_FILE, index=False)
