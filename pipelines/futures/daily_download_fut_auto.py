@@ -5,18 +5,22 @@
 NIFTY-LAB | DAILY FUTURES DOWNLOAD (FO ZIP)
 AUTO MODE — SAFE FOR SCHEDULER
 
+✔ Looks back up to 7 days
+✔ Weekend-aware
+✔ Logs when file already exists
+✔ NEVER breaks pipeline
+✔ RAW ONLY — no cleaning here
+
 Downloads:
   foDDMMYYYY.zip from NSE
 
 Saves:
   data/raw/futures/fo_YYYY-MM-DD.zip
-
-RAW ONLY — DO NOT CLEAN HERE
 """
 
 import argparse
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # --------------------------------------------------
@@ -44,25 +48,26 @@ HEADERS = {
 # --------------------------------------------------
 # MAIN
 # --------------------------------------------------
-from datetime import timedelta
-
 def main(trade_date):
     print("NIFTY-LAB | DAILY FUTURES DOWNLOAD (AUTO)")
     print("-" * 60)
 
-    for i in range(0, 7):  # look back up to 7 days
+    for i in range(7):  # look back up to 7 days
         d = trade_date - timedelta(days=i)
 
-        print(f"📅 Trying FO bhavcopy for {d}")
+        print(f"Trying FO bhavcopy for {d}")
 
+        # Weekend skip
         if d.weekday() >= 5:
-            print("  ⏭ Weekend — skipped")
+            print("   Weekend — skipped")
             continue
 
         out_file = OUT_DIR / f"fo_{d:%Y-%m-%d}.zip"
+
+        # IMPORTANT: explicit log if already exists
         if out_file.exists():
-            print(f"  ✅ Already exists → {out_file.name}")
-            return
+            print(f" Already exists → {out_file.name}")
+            return  # SOFT EXIT (scheduler-safe)
 
         d_nse = d.strftime("%d%m%Y")
         url = BASE_URL.format(date=d_nse)
@@ -72,15 +77,17 @@ def main(trade_date):
 
             if r.status_code == 200 and len(r.content) > 50_000:
                 out_file.write_bytes(r.content)
-                print(f"  ✅ Downloaded & saved → {out_file.name}")
+                print(f" Downloaded & saved → {out_file.name}")
                 return
             else:
-                print("  ⚠️ Not available")
+                print("   Not available")
 
         except requests.RequestException as e:
-            print(f"  ❌ Network error : {e}")
+            print(f" Network error : {e}")
 
-    raise RuntimeError("❌ No FO bhavcopy found in recent days")
+    #  NEVER FAIL PIPELINE
+    print("No FO bhavcopy found in recent days — skipping safely")
+    return
 
 
 # --------------------------------------------------

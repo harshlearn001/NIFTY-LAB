@@ -27,14 +27,14 @@ PCR_FILE = BASE / "data" / "processed" / "options_ml" / "nifty_pcr_daily.parquet
 OUT_DIR = BASE / "data" / "signals"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-print("🚀 NIFTY FINAL STRATEGY")
+print(" NIFTY FINAL STRATEGY")
 
 # --------------------------------------------------
 # SAFE LOAD
 # --------------------------------------------------
 for f in [ML_FILE, OI_FILE, PCR_FILE]:
     if not f.exists():
-        print(f"⚠️ Missing file : {f}")
+        print(f" Missing file : {f}")
         sys.exit(0)
 
 ml  = pd.read_parquet(ML_FILE)
@@ -76,14 +76,14 @@ trade_date = ml["date"].max()
 oi_asof = oi[oi["date"] <= trade_date].sort_values("date").tail(1)
 
 if oi_asof.empty:
-    print(f"❌ No OI available on or before {trade_date}")
+    print(f"No OI available on or before {trade_date}")
     sys.exit(0)
 
 
 # PCR = AS-OF (latest <= trade_date)
 pcr_asof = pcr[pcr["date"] <= trade_date].sort_values("date").tail(1)
 if pcr_asof.empty:
-    print(f"❌ No PCR available on or before {trade_date}")
+    print(f"No PCR available on or before {trade_date}")
     sys.exit(0)
 
 # --------------------------------------------------
@@ -152,6 +152,6 @@ OUT_FILE = OUT_DIR / f"nifty_final_signal_{date_tag}.csv"
 
 out.to_csv(OUT_FILE, index=False)
 
-print("\n✅ FINAL SIGNAL GENERATED")
+print("\nFINAL SIGNAL GENERATED")
 print(out)
-print(f"\n💾 Saved : {OUT_FILE}")
+print(f"\n Saved : {OUT_FILE}")

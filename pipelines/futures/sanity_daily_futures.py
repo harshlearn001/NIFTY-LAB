@@ -127,7 +127,7 @@ def main():
     # ------------------------------
     # FINAL
     # ------------------------------
-    print("DAILY FUTURES SANITY PASSED ✅")
+    print("DAILY FUTURES SANITY PASSED ")
 
 
 if __name__ == "__main__":

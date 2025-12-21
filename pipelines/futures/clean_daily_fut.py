@@ -56,7 +56,7 @@ def normalize_columns(df):
         .str.strip()
         .str.upper()
         .str.replace(" ", "_")
-        .str.replace(r"[^A-Z0-9_]", "", regex=True)  # 🔥 KEY FIX
+        .str.replace(r"[^A-Z0-9_]", "", regex=True)  #  KEY FIX
     )
     return df
 
@@ -150,7 +150,7 @@ def main():
     )
 
     # --------------------------------------------------
-    # ✅ CORRECT NSE OI HANDLING (NOW WORKS)
+    # CORRECT NSE OI HANDLING (NOW WORKS)
     # --------------------------------------------------
     OI_ALIASES = [
         "OPEN_INT",
@@ -204,7 +204,7 @@ def main():
 
     print(f"Saved : {out_pq.name}")
     print(f"Rows  : {len(df)}")
-    print("✅ DAILY FUTURES CLEAN COMPLETE")
+    print(" DAILY FUTURES CLEAN COMPLETE")
 
 # --------------------------------------------------
 if __name__ == "__main__":

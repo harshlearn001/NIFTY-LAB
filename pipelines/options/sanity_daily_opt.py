@@ -81,14 +81,14 @@ def main():
     # --------------------------------------------------
     # HARD CHECKS (ONLY WHEN DATE MATCHES)
     # --------------------------------------------------
-    assert (df["INSTRUMENT"] == "OPTIDX").all(), "❌ Non-OPTIDX rows found"
+    assert (df["INSTRUMENT"] == "OPTIDX").all(), "Non-OPTIDX rows found"
     print("✔ INSTRUMENT = OPTIDX only")
 
-    assert df["TRADE_DATE"].nunique() == 1, "❌ Multiple TRADE_DATE found"
+    assert df["TRADE_DATE"].nunique() == 1, "Multiple TRADE_DATE found"
     print("✔ Single TRADE_DATE")
 
     missing = REQUIRED_COLS - set(df.columns)
-    assert not missing, f"❌ Missing columns: {missing}"
+    assert not missing, f" Missing columns: {missing}"
     print("✔ Required schema OK")
 
     # --------------------------------------------------
@@ -117,7 +117,7 @@ def main():
     if dupes > 0:
         print("⚠️ Warning: Duplicate option rows detected")
 
-    print("✅ DAILY OPTIONS SANITY PASSED")
+    print(" DAILY OPTIONS SANITY PASSED")
 
 
 # ==================================================

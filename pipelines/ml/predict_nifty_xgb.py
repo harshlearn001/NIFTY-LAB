@@ -20,7 +20,7 @@ import joblib
 BASE = Path(r"H:\NIFTY-LAB")
 
 FEATURE_FILE = BASE / "data" / "processed" / "ml" / "nifty_inference_features.parquet"
-MODEL_FILE   = BASE / "models" / "nifty_xgb_gpu.joblib"   # ✅ FIXED
+MODEL_FILE   = BASE / "models" / "nifty_xgb_gpu.joblib"   #  FIXED
 OUT_DIR      = BASE / "data" / "processed" / "ml"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -33,25 +33,25 @@ print("-" * 60)
 # LOAD FEATURES
 # --------------------------------------------------
 if not FEATURE_FILE.exists():
-    print("❌ Inference features not found. Skipping inference.")
+    print("Inference features not found. Skipping inference.")
     exit(0)
 
 X = pd.read_parquet(FEATURE_FILE)
 
-print("📥 Loaded inference features")
+print("Loaded inference features")
 print(X)
 
 # --------------------------------------------------
 # LOAD MODEL (SAFE)
 # --------------------------------------------------
 if not MODEL_FILE.exists():
-    print("⚠️ Model not found — using neutral probabilities")
+    print("Model not found — using neutral probabilities")
 
     prob_up = 0.5
     prob_down = 0.5
 
 else:
-    print(f"✅ Loaded model : {MODEL_FILE.name}")
+    print(f"Loaded model : {MODEL_FILE.name}")
     model = joblib.load(MODEL_FILE)
 
 feature_cols = list(model.feature_names_in_)
@@ -82,6 +82,6 @@ out = pd.DataFrame({
 
 out.to_parquet(OUT_FILE, index=False)
 
-print("\n✅ ML INFERENCE COMPLETE")
+print("\nML INFERENCE COMPLETE")
 print(out)
-print(f"💾 Saved : {OUT_FILE}")
+print(f"Saved : {OUT_FILE}")

@@ -2,17 +2,21 @@
 # -*- coding: utf-8 -*-
 
 """
-NIFTY-LAB | APPEND DAILY NIFTY OPTIONS TO MASTER
+NIFTY-LAB | APPEND DAILY NIFTY OPTIONS TO MASTER (LOCKED)
 
-INPUT  : data/processed/daily/options/OPTIONS_NIFTY_YYYY-MM-DD.parquet
-MASTER : data/continuous/master_options.parquet
-
-AUTO • IDEMPOTENT • NIFTY-ONLY
-(SYMBOL REMOVED FOR FULL AUTOMATION)
+✔ Append-only
+✔ Date-aware
+✔ MASTER SAFETY LOCK
+✔ Auto-backup before write
+✔ NIFTY OPTIDX only
+✔ Deduplicated & sorted
+✔ Scheduler-safe
 """
 
 from pathlib import Path
 import pandas as pd
+import shutil
+from datetime import datetime
 
 # --------------------------------------------------
 # PATHS
@@ -27,7 +31,7 @@ MASTER_PQ  = CONTINUOUS / "master_options.parquet"
 MASTER_CSV = CONTINUOUS / "master_options.csv"
 
 # --------------------------------------------------
-# FINAL MASTER SCHEMA (NO SYMBOL)
+# FINAL MASTER SCHEMA
 # --------------------------------------------------
 COLUMNS = [
     "INSTRUMENT",
@@ -50,7 +54,7 @@ COLUMNS = [
 # --------------------------------------------------
 # HELPERS
 # --------------------------------------------------
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+def normalize_columns(df):
     df.columns = (
         df.columns.astype(str)
         .str.strip()
@@ -61,13 +65,13 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def fix_dates(df: pd.DataFrame) -> pd.DataFrame:
+def fix_dates(df):
     df["TRADE_DATE"] = pd.to_datetime(df["TRADE_DATE"], errors="coerce")
     df["EXP_DATE"]   = pd.to_datetime(df["EXP_DATE"], errors="coerce")
     return df
 
 
-def ensure_numeric(df: pd.DataFrame) -> pd.DataFrame:
+def ensure_numeric(df):
     numeric_cols = [
         "STR_PRICE",
         "OPEN_PRICE",
@@ -101,21 +105,32 @@ def main():
 
     print(f"Daily files found : {len(daily_files)}")
 
-    # ---------- Load existing master ----------
+    # ---------- Load master with HARD LOCK ----------
     if MASTER_PQ.exists():
         master = pd.read_parquet(MASTER_PQ)
         master = normalize_columns(master)
         master = fix_dates(master)
         master = ensure_numeric(master)
         master = master[COLUMNS]
-        before_rows = len(master)
-        print(f"Loaded existing master : {before_rows:,} rows")
+
+        print(f"Loaded master rows : {len(master):,}")
+
+        # 🔒 SAFETY LOCK
+        if len(master) < 100_000:
+            raise RuntimeError(
+                "MASTER OPTIONS TOO SMALL — POSSIBLE CORRUPTION. "
+                "REFUSING TO MODIFY."
+            )
+
+        last_date = master["TRADE_DATE"].max()
+        print(f"Last master date : {last_date.date()}")
+
     else:
         master = pd.DataFrame(columns=COLUMNS)
-        before_rows = 0
-        print("Master does not exist — creating new one")
+        last_date = None
+        print("Master does not exist — creating new")
 
-    # ---------- Load daily files ----------
+    # ---------- Load only NEW daily data ----------
     daily_frames = []
 
     for f in daily_files:
@@ -124,29 +139,34 @@ def main():
         df = fix_dates(df)
         df = ensure_numeric(df)
 
+        if last_date is not None and df["TRADE_DATE"].max() <= last_date:
+            continue
+
         missing = [c for c in COLUMNS if c not in df.columns]
         if missing:
-            print(f"{f.name} skipped (missing columns: {missing})")
             continue
 
         df = df[COLUMNS]
 
-        # Sanity: OPTIDX only
+        # OPTIDX only
         df = df[df["INSTRUMENT"] == "OPTIDX"]
-        if df.empty:
-            continue
 
-        daily_frames.append(df)
+        if last_date is not None:
+            df = df[df["TRADE_DATE"] > last_date]
+
+        if not df.empty:
+            daily_frames.append(df)
 
     if not daily_frames:
-        print("No new valid options rows to append")
+        print("No new options data to append")
         return
 
-    daily_all = pd.concat(daily_frames, ignore_index=True)
+    daily_new = pd.concat(daily_frames, ignore_index=True)
+    print(f"New rows appended : {len(daily_new):,}")
 
-    # ---------- Combine & deduplicate ----------
+    # ---------- Combine & dedupe ----------
     combined = (
-        pd.concat([master, daily_all], ignore_index=True)
+        pd.concat([master, daily_new], ignore_index=True)
         .drop_duplicates(
             subset=[
                 "INSTRUMENT",
@@ -157,26 +177,32 @@ def main():
             ],
             keep="last",
         )
-        .sort_values(["TRADE_DATE", "EXP_DATE", "STR_PRICE", "OPT_TYPE"])
+        .sort_values(
+            ["TRADE_DATE", "EXP_DATE", "STR_PRICE", "OPT_TYPE"]
+        )
         .reset_index(drop=True)
     )
 
-    after_rows = len(combined)
-    added = after_rows - before_rows
+    # ---------- Backup before save ----------
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    shutil.copy2(
+        MASTER_PQ,
+        MASTER_PQ.with_name(f"master_options_backup_{ts}.parquet")
+    )
+    shutil.copy2(
+        MASTER_CSV,
+        MASTER_CSV.with_name(f"master_options_backup_{ts}.csv")
+    )
 
     # ---------- Save ----------
     combined.to_parquet(MASTER_PQ, index=False)
     combined.to_csv(MASTER_CSV, index=False)
 
     print("-" * 60)
-    print("MASTER OPTIONS UPDATED")
-    print(f"Rows : {after_rows:,}")
-    print(f"New rows added : {max(added, 0):,}")
-    if not combined["TRADE_DATE"].isna().all():
-        print(f"From : {combined['TRADE_DATE'].min().date()}")
-        print(f"To   : {combined['TRADE_DATE'].max().date()}")
-    print(f"Parquet : {MASTER_PQ}")
-    print(f"CSV     : {MASTER_CSV}")
+    print("MASTER OPTIONS UPDATED SAFELY")
+    print(f"Rows : {len(combined):,}")
+    print(f"From : {combined['TRADE_DATE'].min().date()}")
+    print(f"To   : {combined['TRADE_DATE'].max().date()}")
     print("DONE")
 
 

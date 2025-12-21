@@ -15,84 +15,91 @@ $LOG_DIR     = "$PROJECT_DIR\logs"
 $DATE        = Get-Date -Format "yyyy-MM-dd"
 $LOG_FILE    = "$LOG_DIR\daily_run_$DATE.log"
 
+# -------- PRE-CHECKS --------
+if (!(Test-Path $PYTHON)) {
+    throw "Python executable not found: $PYTHON"
+}
+
 if (!(Test-Path $LOG_DIR)) {
     New-Item -ItemType Directory -Path $LOG_DIR | Out-Null
 }
 
 Set-Location $PROJECT_DIR
 
+# Clear log header for clean run
+"`n===== DAILY RUN STARTED ($DATE) =====`n" |
+    Out-File -FilePath $LOG_FILE -Encoding UTF8
+
 # -------- HELPERS --------
-function Run-Step($script) {
+function Run-Hard($script) {
     $cmd = "$PYTHON $script"
-    Write-Host "RUNNING: $cmd"
-    Add-Content -Encoding UTF8 $LOG_FILE "`nRUNNING: $cmd"
+    Write-Host "RUNNING (HARD): $cmd"
+    Add-Content -Encoding UTF8 $LOG_FILE "RUNNING (HARD): $cmd"
 
     cmd /c "$cmd >> `"$LOG_FILE`" 2>&1"
     if ($LASTEXITCODE -ne 0) {
-        Add-Content -Encoding UTF8 $LOG_FILE "FAILED: $script"
-        throw "Pipeline stopped at: $script"
+        Add-Content -Encoding UTF8 $LOG_FILE "FAILED (HARD): $script"
+        throw "PIPELINE STOPPED AT: $script"
     }
 }
 
-function Run-Step-Soft($script) {
+function Run-Soft($script) {
     $cmd = "$PYTHON $script"
-    Write-Host "OPTIONAL: $cmd"
-    Add-Content -Encoding UTF8 $LOG_FILE "`nOPTIONAL: $cmd"
+    Write-Host "RUNNING (SOFT): $cmd"
+    Add-Content -Encoding UTF8 $LOG_FILE "RUNNING (SOFT): $cmd"
 
     cmd /c "$cmd >> `"$LOG_FILE`" 2>&1"
 }
 
 # =================================================
-# DATA DOWNLOAD (SOFT — NSE DELAYS ARE NORMAL)
+# STAGE 1 — DOWNLOAD (ALL • SOFT)
 # =================================================
-Run-Step-Soft "pipelines/equity/daily_download_equ.py"
-Run-Step-Soft "pipelines/futures/daily_download_fut.py"
-Run-Step-Soft "pipelines/options/daily_download_opt.py"
-
-
-# =================================================
-# =================================================
-# =================================================
-# =================================================
-# CLEAN (SAFE)
-# =================================================
-Run-Step-Soft "pipelines/equity/clean_daily_equ.py"
-Run-Step-Soft "pipelines/futures/clean_daily_fut.py"
-Run-Step-Soft "pipelines/options/clean_daily_opt.py"
-
+Run-Soft "pipelines/equity/daily_download_equ_auto.py"
+Run-Soft "pipelines/futures/daily_download_fut_auto.py"
+Run-Soft "pipelines/options/daily_download_opt_auto.py"
 
 # =================================================
+# STAGE 2 — CLEAN DAILY (ALL • SOFT)
 # =================================================
-# SANITY (NEVER FAIL PIPELINE)
-# =================================================
-Run-Step-Soft "pipelines/equity/sanity_daily_equity.py"
-Run-Step-Soft "pipelines/futures/sanity_daily_futures.py"
-Run-Step-Soft "pipelines/options/sanity_daily_opt.py"
-
+Run-Soft "pipelines/equity/clean_daily_equ.py"
+Run-Soft "pipelines/futures/clean_daily_fut.py"
+Run-Soft "pipelines/options/clean_daily_opt.py"
 
 # =================================================
-# MASTER BUILD (HARD)
+# STAGE 3 — APPEND MASTER (ALL • HARD)
 # =================================================
-Run-Step "pipelines/equity/append_master_equ.py"
-Run-Step "pipelines/futures/append_master.py"
-Run-Step "pipelines/options/append_master_options.py"
+Run-Hard "pipelines/equity/append_master_equ.py"
+Run-Hard "pipelines/futures/append_master_futures.py"
+Run-Hard "pipelines/options/append_master_options.py"
 
 # =================================================
-# ANALYTICS (SOFT)
+# STAGE 4 — SANITY CHECKS (ALL • SOFT)
 # =================================================
-Run-Step-Soft "analytics/futures_oi_analysis.py"
-Run-Step-Soft "pipelines/options/build_daily_pcr.py"
+Run-Soft "pipelines/equity/sanity_daily_equity.py"
+Run-Soft "pipelines/futures/sanity_daily_futures.py"
+Run-Soft "pipelines/options/sanity_daily_opt.py"
 
 # =================================================
-# ML INFERENCE (SOFT)
+# STAGE 4.5 — GLOBAL ALIGNMENT (SOFT)
 # =================================================
-Run-Step-Soft "pipelines/ml/build_nifty_inference_features.py"
-Run-Step-Soft "pipelines/ml/predict_nifty_xgb.py"
+Run-Soft "pipelines/sanity_global_alignment.py"
 
 # =================================================
-# FINAL STRATEGY (SOFT)
+# STAGE 5 — ANALYTICS (SOFT)
 # =================================================
-Run-Step-Soft "strategies/final/nifty_ml_oi_pcr_final_strategy.py"
+Run-Soft "analytics/build_futures_oi_daily.py"
+Run-Soft "pipelines/options/build_daily_pcr.py"
 
+# =================================================
+# STAGE 6 — ML INFERENCE (SOFT)
+# =================================================
+Run-Soft "pipelines/ml/build_nifty_inference_features.py"
+Run-Soft "pipelines/ml/predict_nifty_xgb.py"
+
+# =================================================
+# STAGE 7 — FINAL STRATEGY (SOFT)
+# =================================================
+Run-Soft "strategies/final/nifty_ml_oi_pcr_final_strategy.py"
+
+Add-Content -Encoding UTF8 $LOG_FILE "===== DAILY RUN COMPLETED SUCCESSFULLY ====="
 Write-Host "DAILY RUN COMPLETED SUCCESSFULLY"
-Add-Content -Encoding UTF8 $LOG_FILE "DAILY RUN COMPLETED SUCCESSFULLY"

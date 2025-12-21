@@ -29,13 +29,13 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 OUT_FILE = OUT_DIR / "nifty_inference_features.parquet"
 
-print("📥 Loading data...")
+print("Loading data...")
 
 # --------------------------------------------------
 # LOAD (SAFE)
 # --------------------------------------------------
 if not EQ_FILE.exists():
-    print("❌ master_equity.parquet missing")
+    print(" master_equity.parquet missing")
     sys.exit(0)
 
 eq = pd.read_parquet(EQ_FILE)
@@ -128,6 +128,6 @@ else:
 # --------------------------------------------------
 features.to_parquet(OUT_FILE, index=False)
 
-print("✅ INFERENCE FEATURES BUILT")
+print("INFERENCE FEATURES BUILT")
 print(features)
-print(f"💾 Saved : {OUT_FILE}")
+print(f" Saved : {OUT_FILE}")

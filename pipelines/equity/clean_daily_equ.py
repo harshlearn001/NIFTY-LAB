@@ -45,14 +45,14 @@ def main():
 
     if raw_file is None:
         print("No raw equity file found in recent days — skipping clean")
-        return  # 🔑 SOFT EXIT
+        return  #  SOFT EXIT
 
     out_pq = OUT_DIR / f"EQUITY_NIFTY_{trade_date}.parquet"
     out_csv = OUT_DIR / f"EQUITY_NIFTY_{trade_date}.csv"
 
     if out_pq.exists():
         print(f"Already cleaned → {out_pq.name}")
-        return  # 🔑 SOFT EXIT
+        return  #  SOFT EXIT
 
     print(f"Using raw file : {raw_file.name}")
     print(f"Trade Date    : {trade_date}")
@@ -81,7 +81,7 @@ def main():
 
     print(f"Saved : {out_pq.name}")
     print(f"Rows  : {len(df)}")
-    print("✅ DAILY EQUITY CLEAN COMPLETE")
+    print(" DAILY EQUITY CLEAN COMPLETE")
 
 # --------------------------------------------------
 if __name__ == "__main__":
@@ -89,4 +89,4 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         print(f"Non-fatal error: {e}")
-        exit(0)  # 🔑 NEVER FAIL PIPELINE
+        exit(0)  #  NEVER FAIL PIPELINE

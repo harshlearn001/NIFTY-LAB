@@ -54,15 +54,15 @@ def main(trade_date):
     for i in range(0, 7):  # look back up to 7 days
         d = trade_date - timedelta(days=i)
 
-        print(f"📅 Trying FO bhavcopy for {d}")
+        print(f"Trying FO bhavcopy for {d}")
 
         if d.weekday() >= 5:
-            print("  ⏭ Weekend — skipped")
+            print("  Weekend — skipped")
             continue
 
         out = OUT_DIR / f"fo_{d:%Y-%m-%d}.zip"
         if out.exists():
-            print(f"  ✅ Already exists → {out.name}")
+            print(f"  Already exists → {out.name}")
             return
 
         tag = d.strftime("%d%m%Y")
@@ -73,15 +73,15 @@ def main(trade_date):
 
             if r.status_code == 200 and len(r.content) > 50_000:
                 out.write_bytes(r.content)
-                print(f"  ✅ Downloaded & saved → {out.name}")
+                print(f"  Downloaded & saved → {out.name}")
                 return
             else:
-                print("  ⚠️ Not available")
+                print("  Not available")
 
         except requests.RequestException as e:
-            print(f"  ❌ Network error : {e}")
+            print(f"  Network error : {e}")
 
-    raise RuntimeError("❌ No FO bhavcopy found in recent days")
+    raise RuntimeError(" No FO bhavcopy found in recent days")
 
 # --------------------------------------------------
 # CLI

@@ -22,7 +22,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 OUT_FILE = OUT_DIR / "nifty_fut_oi_daily.parquet"
 
-print("📥 Building daily futures OI ML file...")
+print("Building daily futures OI ML file...")
 
 df = pd.read_parquet(MASTER_FUT)
 
@@ -70,6 +70,6 @@ out = df[["TRADE_DATE", "oi", "oi_change", "regime"]].rename(
 out.to_parquet(OUT_FILE, index=False)
 out.to_csv(OUT_FILE.with_suffix(".csv"), index=False)
 
-print("✅ Daily futures OI file built")
+print(" Daily futures OI file built")
 print(out.tail())
-print(f"💾 Saved : {OUT_FILE}")
+print(f" Saved : {OUT_FILE}")

@@ -2,12 +2,14 @@
 # -*- coding: utf-8 -*-
 
 """
-NIFTY-LAB | APPEND DAILY EQUITY TO MASTER
+NIFTY-LAB | APPEND DAILY EQUITY TO MASTER (SELF-HEALING)
 
-✔ Picks EQUITY_NIFTY_*.parquet
+✔ Append-only
+✔ Recovers deleted rows from daily history
+✔ Master safety lock
 ✔ Date-safe
-✔ Idempotent
-✔ Historical compatible
+✔ Deduplicated
+✔ Parquet + CSV
 """
 
 from pathlib import Path
@@ -17,8 +19,8 @@ import pandas as pd
 # PATHS
 # --------------------------------------------------
 BASE = Path(r"H:\NIFTY-LAB")
-DAILY_DIR  = BASE / "data" / "processed" / "daily" / "equity"
-MASTER_PQ = BASE / "data" / "continuous" / "master_equity.parquet"
+DAILY_DIR   = BASE / "data" / "processed" / "daily" / "equity"
+MASTER_PQ  = BASE / "data" / "continuous" / "master_equity.parquet"
 MASTER_CSV = BASE / "data" / "continuous" / "master_equity.csv"
 
 # --------------------------------------------------
@@ -28,75 +30,66 @@ def main():
     print("NIFTY-LAB | APPEND DAILY EQUITY TO MASTER")
     print("-" * 60)
 
+    # ------------------------------
+    # Load ALL daily equity (source of truth)
+    # ------------------------------
     daily_files = sorted(DAILY_DIR.glob("EQUITY_NIFTY_*.parquet"))
-
     if not daily_files:
-        print("No daily equity files found")
+        print("No daily equity files found — skipping")
         return
 
     print(f"Daily files found : {len(daily_files)}")
 
+    daily_frames = []
+    for f in daily_files:
+        df = pd.read_parquet(f)
+        df["DATE"] = pd.to_datetime(df["DATE"])
+        daily_frames.append(df)
+
+    daily_all = pd.concat(daily_frames, ignore_index=True)
+
     # ------------------------------
-    # Load master
+    # Load master (with SAFETY LOCK)
     # ------------------------------
     if MASTER_PQ.exists():
         master = pd.read_parquet(MASTER_PQ)
-        master["DATE"] = pd.to_datetime(master["DATE"], dayfirst=True)
-        last_date = master["DATE"].max()
-        print(f"Loaded master : {len(master):,} rows")
-        print(f"Last master date : {last_date.date()}")
+        master["DATE"] = pd.to_datetime(master["DATE"])
+
+        print(f"Loaded master rows : {len(master):,}")
+
+        # 🔒 CRITICAL SAFETY LOCK
+        if len(master) < 100:
+            raise RuntimeError(
+                "MASTER TOO SMALL — POSSIBLE CORRUPTION. "
+                "REFUSING TO MODIFY MASTER EQUITY."
+            )
     else:
         master = pd.DataFrame()
-        last_date = None
         print("No master found — creating new")
 
     # ------------------------------
-    # Load only NEW data
+    # SELF-HEALING MERGE
     # ------------------------------
-    new_rows = []
-
-    for f in daily_files:
-        df = pd.read_parquet(f)
-        df["DATE"] = pd.to_datetime(df["DATE"], dayfirst=True)
-
-        if last_date is not None:
-            df = df[df["DATE"] > last_date]
-
-        if not df.empty:
-            new_rows.append(df)
-
-    if not new_rows:
-        print("No new data to append")
-        return
-
-    daily_new = pd.concat(new_rows, ignore_index=True)
-    print(f"New rows loaded : {len(daily_new)}")
-
-    # ------------------------------
-    # Append & dedupe
-    # ------------------------------
-    final = (
-        pd.concat([master, daily_new], ignore_index=True)
-        .drop_duplicates(subset=["DATE", "SYMBOL"])
-        .sort_values("DATE")
-        .reset_index(drop=True)
+    combined = (
+        pd.concat([master, daily_all], ignore_index=True)
+          .drop_duplicates(subset=["DATE", "SYMBOL"], keep="last")
+          .sort_values("DATE")
+          .reset_index(drop=True)
     )
 
     # ------------------------------
     # SAVE
     # ------------------------------
-    final.to_parquet(MASTER_PQ, index=False)
-    final.to_csv(MASTER_CSV, index=False)
+    combined.to_parquet(MASTER_PQ, index=False)
+    combined.to_csv(MASTER_CSV, index=False)
 
     print("-" * 60)
-    print("MASTER EQUITY UPDATED")
-    print(f"Rows : {len(final):,}")
-    print(f"From : {final['DATE'].min().date()}")
-    print(f"To   : {final['DATE'].max().date()}")
+    print("MASTER EQUITY UPDATED (SELF-HEALING)")
+    print(f"Rows : {len(combined):,}")
+    print(f"From : {combined['DATE'].min().date()}")
+    print(f"To   : {combined['DATE'].max().date()}")
     print("DONE")
 
-# --------------------------------------------------
-# ENTRY
 # --------------------------------------------------
 if __name__ == "__main__":
     main()

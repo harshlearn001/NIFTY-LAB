@@ -51,7 +51,7 @@ df["INSTRUMENT"] = (
 df["OPT_TYPE"] = (
     df["OPT_TYPE"]
     .astype(str)
-    .str.strip()      # 🔴 THIS FIXES YOUR ISSUE
+    .str.strip()      #  THIS FIXES YOUR ISSUE
     .str.upper()
 )
 
@@ -67,7 +67,7 @@ df["OPEN_INT"] = pd.to_numeric(df["OPEN_INT"], errors="coerce").fillna(0)
 df = df[df["INSTRUMENT"] == "OPTIDX"]
 
 if df.empty:
-    print("❌ No OPTIDX rows found")
+    print("No OPTIDX rows found")
     exit(0)
 
 # --------------------------------------------------
@@ -88,7 +88,7 @@ exp_oi = (
 valid = exp_oi[exp_oi["OPEN_INT"] > 0]
 
 if valid.empty:
-    print("⚠️ No expiry with non-zero OI found")
+    print(" No expiry with non-zero OI found")
 
     out = pd.DataFrame([{
         "date": latest_date,
@@ -120,7 +120,7 @@ else:
 out.to_parquet(OUT_PQ, index=False)
 out.to_csv(OUT_CSV, index=False)
 
-print("✅ PCR BUILD COMPLETE")
+print(" PCR BUILD COMPLETE")
 print(out)
-print(f"💾 Saved : {OUT_PQ}")
-print(f"💾 Saved : {OUT_CSV}")
+print(f" Saved : {OUT_PQ}")
+print(f" Saved : {OUT_CSV}")

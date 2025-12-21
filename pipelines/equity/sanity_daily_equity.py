@@ -44,7 +44,7 @@ def main():
             f"No equity data for today ({today}). "
             f"Latest available date: {file_date}. Skipping sanity."
         )
-        return  # 🔑 SOFT EXIT
+        return  #  SOFT EXIT
 
     # ---------------- HARD CHECKS (ONLY IF TODAY) ----------------
     assert df["DATE"].nunique() == 1, "Multiple dates found"
@@ -60,4 +60,4 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         print(f"Non-fatal equity sanity issue: {e}")
-        exit(0)  # 🔑 NEVER FAIL PIPELINE
+        exit(0)  #  NEVER FAIL PIPELINE

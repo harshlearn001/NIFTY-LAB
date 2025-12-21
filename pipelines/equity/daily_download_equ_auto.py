@@ -95,10 +95,10 @@ def main():
         out_file = RAW_DIR / f"equity_{trade_date}.csv"
 
         if out_file.exists():
-            print(f"⏩ Already exists → {out_file.name}")
+            print(f"Already exists → {out_file.name}")
             return
 
-        print(f"📅 Trying index file for {trade_date}")
+        print(f"Trying index file for {trade_date}")
         url = URL_TMPL.format(date=tag)
 
         try:
@@ -137,14 +137,14 @@ def main():
 
             out.to_csv(out_file, index=False)
 
-            print(f"✅ NIFTY index saved → {out_file.name}")
+            print(f"NIFTY index saved → {out_file.name}")
             print(out)
             return
 
         except Exception as e:
-            print(f"⚠️ Not available for {trade_date} ({e})")
+            print(f"Not available for {trade_date} ({e})")
 
-    raise RuntimeError("❌ No NIFTY index data found in recent days")
+    raise RuntimeError("No NIFTY index data found in recent days")
 
 
 # --------------------------------------------------
@@ -155,5 +155,5 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         print(f"Non-fatal error: {e}")
-        # 🔑 IMPORTANT
+        #  IMPORTANT
         exit(0)
