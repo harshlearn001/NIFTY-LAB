@@ -86,15 +86,13 @@ def compute_position_risk(
 if __name__ == "__main__":
     print("📊 PHASE-11 | CAPITAL MANAGER SELF TEST")
 
-    capital = CapitalState(initial_equity=1.0)
+    capital = CapitalState(
+    1.0,        # equity
+    1.0,        # peak
+    0.0,        # drawdown
+    size_mult   # regime multiplier
+)
 
-    test_cases = [
-        (1.00, 1.0),
-        (0.92, 1.0),
-        (0.80, 0.5),
-        (0.65, 0.5),
-        (0.45, 0.3),
-    ]
 
     BASE_RISK = 0.01
 

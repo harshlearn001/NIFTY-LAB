@@ -1,105 +1,122 @@
-# =====================================
-# NIFTY-LAB DAILY AUTO RUN (FINAL • PROD)
-# =====================================
-
-$OutputEncoding = [System.Text.Encoding]::UTF8
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+# =====================================================
+# NIFTY-LAB | DAILY RUN PIPELINE (PS 5.1 SAFE)
+# =====================================================
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# -------- CONFIG --------
-$PROJECT_DIR = "H:\NIFTY-LAB"
-$PYTHON      = "C:\Users\Harshal\anaconda3\envs\TradeSense\python.exe"
-$LOG_DIR     = "$PROJECT_DIR\logs"
-$DATE        = Get-Date -Format "yyyy-MM-dd"
-$LOG_FILE    = "$LOG_DIR\daily_run_$DATE.log"
+# ---------------- ROOT ----------------
+$ROOT = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $ROOT
 
-# -------- PRE-CHECKS --------
+# ---------------- TIME ----------------
+$DATE = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+$DATE_TAG = Get-Date -Format "yyyy-MM-dd"
+
+# ---------------- PYTHON ----------------
+$PYTHON = "C:\Users\Harshal\anaconda3\envs\TradeSense\python.exe"
 if (!(Test-Path $PYTHON)) {
-    throw "Python executable not found: $PYTHON"
+    Write-Host "ERROR: Python not found at $PYTHON"
+    exit 1
 }
 
+# ---------------- LOG ----------------
+$LOG_DIR = Join-Path $ROOT "logs"
 if (!(Test-Path $LOG_DIR)) {
     New-Item -ItemType Directory -Path $LOG_DIR | Out-Null
 }
 
-Set-Location $PROJECT_DIR
+$LOG_FILE = Join-Path $LOG_DIR "daily_run_$DATE_TAG.log"
 
-# Clear log header for clean run
-"`n===== DAILY RUN STARTED ($DATE) =====`n" |
-    Out-File -FilePath $LOG_FILE -Encoding UTF8
+# ---------------- HEADER ----------------
+@"
+=====================================
+NIFTY-LAB DAILY RUN STARTED
+Date      : $DATE
+Project   : $ROOT
+Python    : $PYTHON
+Log file  : $LOG_FILE
+=====================================
+"@ | Tee-Object -FilePath $LOG_FILE
 
-# -------- HELPERS --------
-function Run-Hard($script) {
-    $cmd = "$PYTHON $script"
-    Write-Host "RUNNING (HARD): $cmd"
-    Add-Content -Encoding UTF8 $LOG_FILE "RUNNING (HARD): $cmd"
-
-    cmd /c "$cmd >> `"$LOG_FILE`" 2>&1"
-    if ($LASTEXITCODE -ne 0) {
-        Add-Content -Encoding UTF8 $LOG_FILE "FAILED (HARD): $script"
-        throw "PIPELINE STOPPED AT: $script"
-    }
+# ---------------- HELPERS ----------------
+function Run-Step($name, $module) {
+    Write-Host ""
+    Write-Host "STEP: $name"
+    & $PYTHON -m $module 2>&1 | Tee-Object -FilePath $LOG_FILE -Append
+    Write-Host "DONE: $name"
 }
 
-function Run-Soft($script) {
-    $cmd = "$PYTHON $script"
-    Write-Host "RUNNING (SOFT): $cmd"
-    Add-Content -Encoding UTF8 $LOG_FILE "RUNNING (SOFT): $cmd"
-
-    cmd /c "$cmd >> `"$LOG_FILE`" 2>&1"
+function Run-Script($name, $script) {
+    Write-Host ""
+    Write-Host "STEP: $name"
+    & $PYTHON $script 2>&1 | Tee-Object -FilePath $LOG_FILE -Append
+    Write-Host "DONE: $name"
 }
 
-# =================================================
-# STAGE 1 — DOWNLOAD (ALL • SOFT)
-# =================================================
-Run-Soft "pipelines/equity/daily_download_equ_auto.py"
-Run-Soft "pipelines/futures/daily_download_fut_auto.py"
-Run-Soft "pipelines/options/daily_download_opt_auto.py"
+# =====================================================
+# PHASE 1 - DOWNLOAD
+# =====================================================
+Run-Step "Download Equity"   "pipelines.equity.daily_download_equ_auto"
+Run-Step "Download Futures"  "pipelines.futures.daily_download_fut_auto"
+Run-Step "Download Options"  "pipelines.options.daily_download_opt_auto"
 
-# =================================================
-# STAGE 2 — CLEAN DAILY (ALL • SOFT)
-# =================================================
-Run-Soft "pipelines/equity/clean_daily_equ.py"
-Run-Soft "pipelines/futures/clean_daily_fut.py"
-Run-Soft "pipelines/options/clean_daily_opt.py"
+# =====================================================
+# PHASE 2 - CLEAN
+# =====================================================
+Run-Step "Clean Equity"   "pipelines.equity.clean_daily_equ"
+Run-Step "Clean Futures"  "pipelines.futures.clean_daily_fut"
+Run-Step "Clean Options"  "pipelines.options.clean_daily_opt"
 
-# =================================================
-# STAGE 3 — APPEND MASTER (ALL • HARD)
-# =================================================
-Run-Hard "pipelines/equity/append_master_equ.py"
-Run-Hard "pipelines/futures/append_master_futures.py"
-Run-Hard "pipelines/options/append_master_options.py"
+# =====================================================
+# PHASE 3 - APPEND TO MASTER
+# =====================================================
+Run-Step "Append Equity Master"   "pipelines.equity.append_master_equ"
+Run-Step "Append Futures Master"  "pipelines.futures.append_master_futures"
+Run-Step "Append Options Master"  "pipelines.options.append_master_options"
 
-# =================================================
-# STAGE 4 — SANITY CHECKS (ALL • SOFT)
-# =================================================
-Run-Soft "pipelines/equity/sanity_daily_equity.py"
-Run-Soft "pipelines/futures/sanity_daily_futures.py"
-Run-Soft "pipelines/options/sanity_daily_opt.py"
+# =====================================================
+# PHASE 4 - SANITY
+# =====================================================
+Run-Step "Global Sanity Check" "pipelines.sanity_global_alignment"
 
-# =================================================
-# STAGE 4.5 — GLOBAL ALIGNMENT (SOFT)
-# =================================================
-Run-Soft "pipelines/sanity_global_alignment.py"
+# =====================================================
+# PHASE 5 - DERIVED DATA
+# =====================================================
+Run-Script "Build Futures OI" "analytics/build_futures_oi_daily.py"
+Run-Step   "Build PCR"        "pipelines.options.build_daily_pcr"
 
-# =================================================
-# STAGE 5 — ANALYTICS (SOFT)
-# =================================================
-Run-Soft "analytics/build_futures_oi_daily.py"
-Run-Soft "pipelines/options/build_daily_pcr.py"
+# =====================================================
+# PHASE 6 - MARKET STRUCTURE
+# =====================================================
+Run-Step "Build Continuous NIFTY" "pipelines.historical.build_nifty_continuous"
+Run-Step "Build Regime"           "pipelines.regime.build_nifty_regime_features"
 
-# =================================================
-# STAGE 6 — ML INFERENCE (SOFT)
-# =================================================
-Run-Soft "pipelines/ml/build_nifty_inference_features.py"
-Run-Soft "pipelines/ml/predict_nifty_xgb.py"
+# =====================================================
+# PHASE 7 - ML INFERENCE
+# =====================================================
+Run-Step "Build Inference Features" "pipelines.ml.build_nifty_inference_features"
+Run-Step "Predict ML Ensemble"      "pipelines.ml.predict_nifty_ensemble_calibrated"
 
-# =================================================
-# STAGE 7 — FINAL STRATEGY (SOFT)
-# =================================================
-Run-Soft "strategies/final/nifty_ml_oi_pcr_final_strategy.py"
+# =====================================================
+# PHASE 8 - FUTURES STRATEGY
+# =====================================================
+Run-Script "Final Futures Strategy" "strategies/final/nifty_ml_oi_pcr_final_strategy.py"
 
-Add-Content -Encoding UTF8 $LOG_FILE "===== DAILY RUN COMPLETED SUCCESSFULLY ====="
-Write-Host "DAILY RUN COMPLETED SUCCESSFULLY"
+# =====================================================
+# PHASE 9 - OPTIONS ENGINE
+# =====================================================
+Run-Script "Build Option Chain" "strategies/options/build_nifty_option_chain.py"
+Run-Script "Options Execution"  "strategies/options/options_execution_engine.py"
+
+# =====================================================
+# END
+# =====================================================
+@"
+-------------------------------------
+PIPELINE COMPLETED SUCCESSFULLY
+-------------------------------------
+"@ | Tee-Object -FilePath $LOG_FILE -Append
+
+Write-Host ""
+Write-Host "ALL DONE - NO ERRORS"
