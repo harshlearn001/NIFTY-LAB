@@ -2,90 +2,76 @@
 # -*- coding: utf-8 -*-
 
 """
-NIFTY-LAB | PROBABILITY CALIBRATION (FINAL FIX)
+NIFTY-LAB | XGBOOST PROBABILITY CALIBRATION (TEMPERATURE SCALING)
 
-✔ Feature-aligned
+✔ Uses historical ML dataset
+✔ Enforces exact XGB feature order
+✔ No leakage
 ✔ Pickle-safe
-✔ XGB → Temperature scaling
-✔ LGBM → Isotonic
 """
 
-import joblib
+import sys
+from pathlib import Path
 import numpy as np
 import pandas as pd
-from sklearn.isotonic import IsotonicRegression
-from configs.paths import BASE_DIR
+import joblib
 
 # --------------------------------------------------
-# PICKLE-SAFE TEMPERATURE SCALER
+# PROJECT ROOT
 # --------------------------------------------------
-class TemperatureScaler:
-    def __init__(self, T=1.3):
-        self.T = T
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-    def transform(self, p):
-        p = np.clip(p, 1e-6, 1 - 1e-6)
-        logit = np.log(p / (1 - p))
-        return 1 / (1 + np.exp(-logit / self.T))
+from configs.paths import PROC_DIR
+from pipelines.ml.temperature_scaler import TemperatureScaler
 
 # --------------------------------------------------
 # PATHS
 # --------------------------------------------------
-DATA = BASE_DIR / "data/processed/ml/nifty_ml_features_CANONICAL.parquet"
+DATA_FILE = PROC_DIR / "ml" / "nifty_ml_features_hist_no_pcr.parquet"
 
-XGB_MODEL  = BASE_DIR / "models/nifty_xgb_gpu.joblib"
-LGBM_MODEL = BASE_DIR / "models/nifty_lgbm_model.joblib"
-
-OUT_XGB  = BASE_DIR / "models/nifty_xgb_temp_scaler.joblib"
-OUT_LGBM = BASE_DIR / "models/nifty_lgbm_calibrated.joblib"
-
-print("🔧 Loading data...")
-df = pd.read_parquet(DATA)
-
-y = df["target"].values
+MODEL_DIR = ROOT / "models"
+XGB_MODEL = MODEL_DIR / "nifty_xgb_gpu.joblib"
+OUT_SCALER = MODEL_DIR / "nifty_xgb_temp_scaler.joblib"
+OUT_TEMP = MODEL_DIR / "nifty_xgb_temperature.txt"
 
 # --------------------------------------------------
-# 🔥 XGBOOST CALIBRATION
-# --------------------------------------------------
-print("🔧 Calibrating XGB (temperature scaling)")
+def main():
+    print("📦 Loading historical ML dataset...")
+    df = pd.read_parquet(DATA_FILE)
+    print(f"📊 Samples: {len(df):,}")
 
-xgb = joblib.load(XGB_MODEL)
-xgb_features = list(xgb.feature_names_in_)
+    y = df["target"].values
 
-X_xgb = df.copy()
-for col in xgb_features:
-    if col not in X_xgb.columns:
-        X_xgb[col] = 0.0
+    print("🤖 Loading XGBoost model...")
+    model = joblib.load(XGB_MODEL)
 
-X_xgb = X_xgb[xgb_features]
+    # --------------------------------------------------
+    # FEATURE ALIGNMENT (CRITICAL)
+    # --------------------------------------------------
+    features = model.get_booster().feature_names
+    print(f"🧠 Features used ({len(features)}):")
+    print(features)
 
-raw_probs = xgb.predict_proba(X_xgb)[:, 1]
+    X = df[features]
 
-temp_scaler = TemperatureScaler(T=1.3)
-joblib.dump(temp_scaler, OUT_XGB)
+    print("🔥 Generating raw probabilities...")
+    raw_prob = model.predict_proba(X)[:, 1]
 
-# --------------------------------------------------
-# 🔥 LIGHTGBM CALIBRATION
-# --------------------------------------------------
-print("🔧 Calibrating LGBM (isotonic)")
+    eps = 1e-6
+    logits = np.log((raw_prob + eps) / (1 - raw_prob + eps))
 
-lgbm = joblib.load(LGBM_MODEL)
-lgbm_features = list(lgbm.feature_name_)
+    print("🌡 Calibrating with temperature scaling...")
+    scaler = TemperatureScaler().fit(logits, y)
 
-X_lgbm = df.copy()
-for col in lgbm_features:
-    if col not in X_lgbm.columns:
-        X_lgbm[col] = 0.0
+    joblib.dump(scaler, OUT_SCALER)
+    OUT_TEMP.write_text(f"{scaler.temperature_:.6f}")
 
-X_lgbm = X_lgbm[lgbm_features]
+    print("\n✅ MODEL CALIBRATION COMPLETE")
+    print(f"💾 Scaler saved → {OUT_SCALER}")
+    print(f"🌡 Temperature → {scaler.temperature_:.4f}")
 
-lgbm_probs = lgbm.predict_proba(X_lgbm)[:, 1]
 
-iso = IsotonicRegression(out_of_bounds="clip")
-iso.fit(lgbm_probs, y)
-
-joblib.dump(iso, OUT_LGBM)
-
-print("✅ CALIBRATION COMPLETE (100% SAFE)")
-print(f"💾 XGB scaler → {OUT_XGB}")
-print(f"💾 LGBM calibrator → {OUT_LGBM}")
+if __name__ == "__main__":
+    main()

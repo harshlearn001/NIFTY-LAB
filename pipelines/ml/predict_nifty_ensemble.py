@@ -2,100 +2,123 @@
 # -*- coding: utf-8 -*-
 
 """
-NIFTY-LAB | ML ENSEMBLE INFERENCE (XGB + LGBM)
+NIFTY-LAB | DAILY XGBOOST ENSEMBLE PREDICTION (PRODUCTION SAFE)
 
-✔ Production safe
-✔ Uses SAME inference features
-✔ Probability ensemble
-✔ Drop-in replacement for final strategy
+✔ Exact feature alignment with training
+✔ Auto-fills missing one-hot regime columns
+✔ Drops extra columns safely
+✔ Uses calibrated probabilities
+✔ Backtest = Daily = Live compatible
 """
 
+import sys
+from pathlib import Path
 import pandas as pd
 import joblib
-from pathlib import Path
+import warnings
+import numpy as np
 
-# --------------------------------------------------
+# ==================================================
+# PROJECT ROOT (CRITICAL)
+# ==================================================
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from configs.paths import PROC_DIR
+
+# ==================================================
 # PATHS
-# --------------------------------------------------
-from configs.paths import BASE_DIR
+# ==================================================
+FEAT_FILE = PROC_DIR / "ml" / "nifty_inference_features.parquet"
 
-FEATURE_FILE = BASE_DIR / "data/processed/ml/nifty_inference_features.parquet"
+MODEL_DIR = ROOT / "models"
+XGB_MODEL = MODEL_DIR / "nifty_xgb_gpu.joblib"
+CALIB    = MODEL_DIR / "nifty_xgb_temp_scaler.joblib"
 
-XGB_MODEL = BASE_DIR / "models/nifty_xgb_gpu.joblib"
-LGBM_MODEL = BASE_DIR / "models/nifty_lgbm_model.joblib"
-
-OUT_DIR = BASE_DIR / "data/processed/ml"
+OUT_DIR = PROC_DIR / "ml"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OUT_FILE = OUT_DIR / "nifty_ml_prediction.parquet"
+OUT_CSV = OUT_DIR / "nifty_ml_daily_prediction.csv"
+OUT_PQ  = OUT_DIR / "nifty_ml_daily_prediction.parquet"
+
+# ==================================================
+# LOAD INFERENCE FEATURES
+# ==================================================
+print("📥 Loading inference features...")
+df = pd.read_parquet(FEAT_FILE)
+
+if "date" not in df.columns:
+    raise RuntimeError("❌ 'date' column missing in inference features")
+
+dates = df["date"].copy()
+X_raw = df.drop(columns=["date"], errors="ignore")
+
+# ==================================================
+# LOAD MODEL & CALIBRATOR
+# ==================================================
+print("📦 Loading XGBoost model & calibrator...")
+xgb = joblib.load(XGB_MODEL)
+cal = joblib.load(CALIB)
+
+# ==================================================
+# ENFORCE EXACT FEATURE SET (CRITICAL FIX)
+# ==================================================
+expected_features = xgb.get_booster().feature_names
+
+print(f"🧠 Features used ({len(expected_features)}):")
+print(expected_features)
 
 # --------------------------------------------------
-# CONFIG
+# FIX MISSING / EXTRA FEATURES
 # --------------------------------------------------
-W_XGB = 0.5
-W_LGBM = 0.5
+missing = set(expected_features) - set(X_raw.columns)
+extra   = set(X_raw.columns) - set(expected_features)
 
-print("🚀 NIFTY ML ENSEMBLE INFERENCE (XGB + LGBM)")
-print("-" * 60)
+# ➕ Add missing one-hot columns as ZERO
+for col in missing:
+    X_raw[col] = 0.0
 
-# --------------------------------------------------
-# LOAD FEATURES
-# --------------------------------------------------
-if not FEATURE_FILE.exists():
-    print("❌ Inference features not found")
-    exit(0)
+# ➖ Drop extra columns
+if extra:
+    X_raw = X_raw.drop(columns=list(extra))
 
-X = pd.read_parquet(FEATURE_FILE)
-print("Loaded inference features")
-print(X)
+# 🔁 Enforce strict column order
+X = X_raw[expected_features]
 
-# --------------------------------------------------
-# SAFE MODEL LOAD
-# --------------------------------------------------
-def predict_safe(model_path, X):
-    if not model_path.exists():
-        print(f"⚠️ Missing model → {model_path.name} (neutral)")
-        return 0.5, 0.5
+# ==================================================
+# PREDICT (SAFE)
+# ==================================================
+print("🤖 Predicting daily probabilities...")
 
-    model = joblib.load(model_path)
-    features = list(model.feature_names_in_)
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    raw_prob = xgb.predict_proba(X)[:, 1]
 
-    X_aligned = X.copy()
-    for col in features:
-        if col not in X_aligned.columns:
-            X_aligned[col] = 0
+# ==================================================
+# CALIBRATION (LOGITS → PROB)
+# ==================================================
+eps = 1e-6
+logits = np.log((raw_prob + eps) / (1 - raw_prob + eps))
+prob_up = cal.transform(logits).ravel()
 
-    X_model = X_aligned[features]
-    probs = model.predict_proba(X_model)[0]
-
-    return float(probs[1]), float(probs[0])  # up, down
-
-
-# --------------------------------------------------
-# PREDICTIONS
-# --------------------------------------------------
-xgb_up, xgb_down = predict_safe(XGB_MODEL, X)
-lgbm_up, lgbm_down = predict_safe(LGBM_MODEL, X)
-
-# --------------------------------------------------
-# ENSEMBLE
-# --------------------------------------------------
-prob_up = (W_XGB * xgb_up) + (W_LGBM * lgbm_up)
-prob_down = 1.0 - prob_up
-
-# --------------------------------------------------
+# ==================================================
 # OUTPUT
-# --------------------------------------------------
+# ==================================================
 out = pd.DataFrame({
-    "date": X["date"],
-    "prob_up": [round(prob_up, 5)],
-    "prob_down": [round(prob_down, 5)],
-    "xgb_up": [round(xgb_up, 5)],
-    "lgbm_up": [round(lgbm_up, 5)],
+    "DATE": dates,
+    "PROB_UP": prob_up,
+    "PROB_DOWN": 1.0 - prob_up
 })
 
-out.to_parquet(OUT_FILE, index=False)
+out.to_csv(OUT_CSV, index=False)
+out.to_parquet(OUT_PQ, index=False)
 
-print("\n✅ ENSEMBLE INFERENCE COMPLETE")
-print(out)
-print(f"\n💾 Saved → {OUT_FILE}")
+# ==================================================
+# SUMMARY
+# ==================================================
+print("\n✅ DAILY XGBOOST PREDICTION READY")
+print(f"📦 CSV     : {OUT_CSV}")
+print(f"📦 Parquet : {OUT_PQ}")
+print("\nSignal:")
+print(out.tail(1).T)
