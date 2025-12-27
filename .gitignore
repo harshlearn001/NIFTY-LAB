@@ -1,19 +1,47 @@
+# =========================
 # Data
+# =========================
 data/
 *.parquet
 *.csv
 
+# =========================
 # Models
+# =========================
 models/
 *.joblib
 
+# =========================
 # Python
+# =========================
 __pycache__/
 *.pyc
+.env
 
+# =========================
 # Logs
+# =========================
 logs/
 
+# =========================
 # OS
+# =========================
 .DS_Store
 Thumbs.db
+
+# =========================
+# Pipelines safety
+# =========================
+pipelines/equity/delete_last_equity_entry.py
+pipelines/futures/*_once.py
+
+# =========================
+# Local tests (do not commit)
+# =========================
+test_ensemble_weights.py
+
+# =========================
+# Experimental analytics
+# =========================
+analytics/equity_momentum/
+analytics/equity_momentum/output/
