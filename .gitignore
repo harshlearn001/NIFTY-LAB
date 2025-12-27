@@ -1,12 +1,17 @@
 # =========================
-# Data
+# Data (large & reproducible)
 # =========================
-data/
-*.parquet
-*.csv
+data/raw/
+data/processed/
+data/continuous/
+data/audit/
+
+# Allow signals & reports
+!data/signals/
+!data/analysis/
 
 # =========================
-# Models
+# Models (local artifacts)
 # =========================
 models/
 *.joblib
