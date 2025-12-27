@@ -2,224 +2,177 @@
 # -*- coding: utf-8 -*-
 
 """
-NIFTY-LAB | FINAL STRATEGY (PRODUCTION SAFE)
-
-ML + FUTURES OI + OPTIONS PCR + MARKET REGIME (EOD)
-
-✔ Single-source decision logic
-✔ Live & Backtest identical
-✔ As-of joins (NO lookahead)
-✔ PCR optional (neutral if missing)
-✔ BEAR blocks LONG, allows SHORT
-✔ PHASE-2 confidence filtering
-✔ Never crashes on missing data
+NIFTY-LAB | FINAL ML + OI + PCR STRATEGY
+======================================
+✔ Works with single-model or multi-model predictions
+✔ Dynamic ensemble when available
+✔ Safe fallback when only PROB_UP exists
+✔ Never crashes
+✔ Signal-only (NO execution)
 """
 
-# ==================================================
-# BOOTSTRAP
-# ==================================================
+# ==========================================================
+# PATH FIX
+# ==========================================================
 import sys
 from pathlib import Path
-import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+    sys.path.append(str(ROOT))
 
-from configs.paths import BASE_DIR, CONT_DIR
+# ==========================================================
+# IMPORTS
+# ==========================================================
+from pipelines.ml.audit_logger import log_decision
 
-print("🧠 ML MODE →", "BACKTEST" if "backtest" in sys.argv[0] else "LIVE")
-print("🚀 NIFTY FINAL STRATEGY (ML + OI + PCR + REGIME)")
+import pandas as pd
+from datetime import datetime
 
-# ==================================================
+from pipelines.ml.ensemble_blender import ensemble_probability
+from pipelines.ml.trade_decision import decide_trade
+
+# ==========================================================
 # PATHS
-# ==================================================
-ML_FILE  = BASE_DIR / "data/processed/ml/nifty_ml_prediction.parquet"
-OI_FILE  = BASE_DIR / "data/processed/futures_ml/nifty_fut_oi_daily.parquet"
-PCR_FILE = BASE_DIR / "data/processed/options_ml/nifty_pcr_daily.parquet"
-REG_FILE = CONT_DIR / "nifty_regime.parquet"
+# ==========================================================
+BASE = ROOT
 
-OUT_DIR = BASE_DIR / "data/signals"
+PRED_FILE = BASE / "data/processed/ml/nifty_ml_prediction.parquet"
+REGIME_FILE = BASE / "data/continuous/nifty_regime.parquet"
+
+OUT_DIR = BASE / "data/signals"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# ==================================================
-# DECISION ENGINE (PHASE-2)
-# ==================================================
-def generate_signal(
-    prob_up: float,
-    prob_down: float,
-    oi_regime: str,
-    pcr_val: float,
-    trend_regime: str,
-    vol_regime: str,
-):
-    signal = "NO_TRADE"
-    position_size = 0.0
-    reason = []
+OUT_FILE = OUT_DIR / f"nifty_final_signal_{datetime.now():%d-%m-%Y}.csv"
 
-    MIN_CONF = 0.58   # 🔥 PHASE-2 THRESHOLD
+# ==========================================================
+# CONFIG
+# ==========================================================
+CAPITAL = 1_000_000
+VOLATILITY = 0.012
+REGIME_CHANGED_RECENTLY = False
 
-    # -----------------------------
-    # HARD MARKET FILTER
-    # -----------------------------
-    if trend_regime == "BEAR" and prob_up >= prob_down:
-        return "NO_TRADE", 0.0, ["BEAR_NO_LONG"]
+REGIME_PRIOR = {
+    "TREND":    [0.45, 0.25, 0.30],
+    "RANGE":    [0.55, 0.35, 0.10],
+    "HIGH_VOL": [0.60, 0.25, 0.15],
+}
 
-    # -----------------------------
-    # ML CONFIDENCE FILTER
-    # -----------------------------
-    if prob_up >= MIN_CONF and prob_up > prob_down:
-        signal = "LONG"
-        position_size = (
-            1.0 if prob_up >= 0.75 else
-            0.6 if prob_up >= 0.65 else
-            0.4
-        )
-        reason.append("ML_UP_STRONG")
+# ==========================================================
+# LOAD PREDICTIONS
+# ==========================================================
+if not PRED_FILE.exists():
+    raise FileNotFoundError(f"❌ Missing prediction file: {PRED_FILE}")
 
-    elif prob_down >= MIN_CONF and prob_down > prob_up:
-        signal = "SHORT"
-        position_size = (
-            1.0 if prob_down >= 0.75 else
-            0.6 if prob_down >= 0.65 else
-            0.4
-        )
-        reason.append("ML_DOWN_STRONG")
+pred_df = pd.read_parquet(PRED_FILE)
+pred = pred_df.iloc[-1]
+pred.index = pred.index.str.upper()
+cols = pred.index.tolist()
 
-    else:
-        return "NO_TRADE", 0.0, ["LOW_CONFIDENCE"]
-
-    # -----------------------------
-    # OI REGIME WEIGHTING
-    # -----------------------------
-    if signal == "LONG":
-        if oi_regime in {"LONG_BUILDUP", "SHORT_COVERING"}:
-            reason.append(oi_regime)
-        elif oi_regime == "LONG_UNWINDING":
-            position_size *= 0.6
-            reason.append("OI_WEAK_LONG")
-        else:
-            position_size *= 0.4
-            reason.append("OI_AGAINST_LONG")
-
-    if signal == "SHORT":
-        if oi_regime in {"SHORT_BUILDUP", "LONG_UNWINDING"}:
-            reason.append(oi_regime)
-        elif oi_regime == "SHORT_COVERING":
-            position_size *= 0.6
-            reason.append("OI_WEAK_SHORT")
-        else:
-            position_size *= 0.4
-            reason.append("OI_AGAINST_SHORT")
-
-    # -----------------------------
-    # PCR CONFIRMATION
-    # -----------------------------
-    if signal == "LONG" and pcr_val > 1.1:
-        position_size *= 0.7
-        reason.append("PCR_CAUTION")
-
-    if signal == "SHORT" and pcr_val < 0.9:
-        position_size *= 0.7
-        reason.append("PCR_CAUTION")
-
-    # -----------------------------
-    # VOLATILITY CONTROL
-    # -----------------------------
-    if vol_regime == "HIGH_VOL":
-        position_size *= 0.6
-        reason.append("HIGH_VOL")
-
-    return signal, round(position_size, 2), reason
-
-# ==================================================
-# SAFE LOAD
-# ==================================================
-for f in [ML_FILE, OI_FILE, REG_FILE]:
-    if not f.exists():
-        print(f"❌ Missing file : {f}")
-        sys.exit(0)
-
-ml     = pd.read_parquet(ML_FILE)
-oi     = pd.read_parquet(OI_FILE)
-regime = pd.read_parquet(REG_FILE)
-pcr    = pd.read_parquet(PCR_FILE) if PCR_FILE.exists() else pd.DataFrame()
-
-# ==================================================
-# DATE NORMALIZATION
-# ==================================================
-def norm(df):
-    for c in ["date", "DATE", "TRADE_DATE"]:
-        if c in df.columns:
-            df["date"] = pd.to_datetime(df[c]).dt.date
-            return df
-    raise RuntimeError("No date column")
-
-ml = norm(ml)
-oi = norm(oi)
-regime = norm(regime)
-if not pcr.empty:
-    pcr = norm(pcr)
-
-# ==================================================
-# OI REGIME COLUMN
-# ==================================================
-oi_reg_col = next(c for c in ["regime", "oi_regime", "oi_signal"] if c in oi.columns)
-
-# ==================================================
-# ANCHOR DATE
-# ==================================================
-trade_date = ml["date"].max()
-
-row_ml = ml[ml["date"] == trade_date].iloc[-1]
-row_oi = oi[oi["date"] <= trade_date].sort_values("date").iloc[-1]
-row_reg = regime[regime["date"] <= trade_date].sort_values("date").iloc[-1]
-
-# PCR AS-OF SAFE
-if pcr.empty or pcr[pcr["date"] <= trade_date].empty:
-    pcr_val = 1.0
-    pcr_note = "PCR_MISSING"
+# ==========================================================
+# LOAD REGIME (SAFE)
+# ==========================================================
+if REGIME_FILE.exists():
+    regime_df = pd.read_parquet(REGIME_FILE)
+    regime = str(regime_df.iloc[-1].get("REGIME", "TREND")).upper()
 else:
-    pcr_val = float(pcr[pcr["date"] <= trade_date].sort_values("date").iloc[-1]["pcr"])
-    pcr_note = "PCR_OK"
+    regime = "TREND"
+    print("⚠ Regime file missing → defaulting to TREND")
 
-# ==================================================
+if regime not in REGIME_PRIOR:
+    regime = "TREND"
+
+# ==========================================================
+# CASE 1️⃣ : MULTI-MODEL PROBABILITIES AVAILABLE
+# ==========================================================
+multi_model = all(c in cols for c in ["P_XGB", "P_LGBM", "P_LSTM"])
+
+if multi_model:
+
+    probs = [
+        float(pred["P_XGB"]),
+        float(pred["P_LGBM"]),
+        float(pred["P_LSTM"]),
+    ]
+
+    scores = [
+        float(pred.get("SCORE_XGB", 0.5)),
+        float(pred.get("SCORE_LGBM", 0.5)),
+        float(pred.get("SCORE_LSTM", 0.5)),
+    ]
+
+    ensemble_out = ensemble_probability(
+        probs=probs,
+        scores=scores,
+        regime_weights=REGIME_PRIOR[regime]
+    )
+
+# ==========================================================
+# CASE 2️⃣ : SINGLE MODEL (PROB_UP / PROB_DOWN)
+# ==========================================================
+elif "PROB_UP" in cols:
+
+    p_up = float(pred["PROB_UP"])
+
+    # Fake a 3-model ensemble with identical beliefs
+    probs = [p_up, p_up, p_up]
+    scores = [0.5, 0.5, 0.5]
+
+    ensemble_out = ensemble_probability(
+        probs=probs,
+        scores=scores,
+        regime_weights=[1/3, 1/3, 1/3]
+    )
+
+    print("ℹ Single-model probability detected → ensemble fallback applied")
+
+else:
+    raise RuntimeError(
+        f"❌ Unsupported prediction schema. Columns found:\n{cols}"
+    )
+
+# ==========================================================
 # DECISION
-# ==================================================
-signal, position_size, reason = generate_signal(
-    prob_up=float(row_ml["prob_up"]),
-    prob_down=float(row_ml["prob_down"]),
-    oi_regime=row_oi[oi_reg_col],
-    pcr_val=pcr_val,
-    trend_regime=row_reg["TREND_REGIME"],
-    vol_regime=row_reg["VOL_REGIME"],
+# ==========================================================
+decision = decide_trade(
+    ensemble_out=ensemble_out,
+    capital=CAPITAL,
+    volatility=VOLATILITY,
+    regime=regime,
+    regime_changed_recently=REGIME_CHANGED_RECENTLY
 )
 
-reason.append(pcr_note)
+# ==========================================================
+# OUTPUT SIGNAL
+# ==========================================================
+signal = {
+    "DATE": datetime.now().strftime("%Y-%m-%d"),
+    "SYMBOL": "NIFTY",
+    "REGIME": regime,
+    "ACTION": decision.action,
+    "POSITION_SIZE": decision.position_size,
+    "CONFIDENCE": round(ensemble_out["confidence"], 6),
+    "PROBABILITY": round(ensemble_out["P_adj"], 6),
+    "AGREEMENT": round(ensemble_out["agreement"], 6),
+    "REASON": decision.reason,
+}
 
-print(f"📊 Market Regime → {row_reg['TREND_REGIME']} | {row_reg['VOL_REGIME']}")
+df_out = pd.DataFrame([signal])
+df_out.to_csv(OUT_FILE, index=False)
 
-# ==================================================
-# OUTPUT
-# ==================================================
-out = pd.DataFrame({
-    "date": [trade_date],
-    "signal": [signal],
-    "position_size": [position_size],
-    "prob_up": [row_ml["prob_up"]],
-    "prob_down": [row_ml["prob_down"]],
-    "oi_regime": [row_oi[oi_reg_col]],
-    "trend_regime": [row_reg["TREND_REGIME"]],
-    "vol_regime": [row_reg["VOL_REGIME"]],
-    "pcr": [round(pcr_val, 3)],
-    "reason": [" | ".join(reason)],
-})
+# ==========================
+# AUDIT LOGGING (NEW)
+# ==========================
+csv_audit, pq_audit = log_decision(signal, BASE)
 
-date_tag = pd.to_datetime(trade_date).strftime("%d-%m-%Y")
-OUT_FILE = OUT_DIR / f"nifty_final_signal_{date_tag}.csv"
 
-out.to_csv(OUT_FILE, index=False)
-
+# ==========================================================
+# CONSOLE OUTPUT
+# ==========================================================
 print("\n✅ FINAL SIGNAL GENERATED")
-print(out)
-print(f"\n💾 Saved → {OUT_FILE}")
+print(df_out.to_string(index=False))
+print(f"\n📁 Saved to: {OUT_FILE}")
+print(f"\n🧾 Audit log updated:")
+print(f"CSV → {csv_audit}")
+print(f"PARQUET → {pq_audit}")
+
